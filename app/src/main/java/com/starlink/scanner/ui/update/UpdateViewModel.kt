@@ -38,6 +38,10 @@ class UpdateViewModel(
     private val _downloading = MutableStateFlow(false)
     val downloading: StateFlow<Boolean> = _downloading.asStateFlow()
 
+    /** Download progress 0..100, or -1 when the total size is unknown (indeterminate). */
+    private val _downloadProgress = MutableStateFlow(-1)
+    val downloadProgress: StateFlow<Int> = _downloadProgress.asStateFlow()
+
     /** One-shot user messages (snackbar): errors, "up to date", etc. */
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
@@ -81,8 +85,11 @@ class UpdateViewModel(
         }
         viewModelScope.launch {
             _downloading.value = true
+            _downloadProgress.value = -1
             try {
-                val apk = installer.download(available.apkDownloadUrl)
+                val apk = installer.download(available.apkDownloadUrl) { pct ->
+                    _downloadProgress.value = pct
+                }
                 _prompt.value = null
                 installer.install(apk)
             } catch (e: Exception) {

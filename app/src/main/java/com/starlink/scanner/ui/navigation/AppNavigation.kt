@@ -53,6 +53,7 @@ fun AppNavigation() {
     val updateViewModel: UpdateViewModel = viewModel(factory = UpdateViewModel.Factory)
     val updatePrompt by updateViewModel.prompt.collectAsStateWithLifecycle()
     val updateDownloading by updateViewModel.downloading.collectAsStateWithLifecycle()
+    val updateProgress by updateViewModel.downloadProgress.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) {
         updateViewModel.checkOnLaunch()
         updateViewModel.messages.collect { msg -> snackbarHostState.showSnackbar(msg) }
@@ -112,6 +113,7 @@ fun AppNavigation() {
             UpdateDialog(
                 available = available,
                 downloading = updateDownloading,
+                progress = updateProgress,
                 onUpdate = updateViewModel::acceptUpdate,
                 onLater = updateViewModel::dismiss,
                 onSkip = updateViewModel::skip,

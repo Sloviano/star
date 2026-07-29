@@ -22,23 +22,43 @@ class ApkInstaller(
     private val client: OkHttpClient = defaultClient(),
 ) {
 
-    /** Streams the APK at [downloadUrl] to `cacheDir/updates/update.apk` and returns the file. */
-    suspend fun download(downloadUrl: String): File = withContext(Dispatchers.IO) {
-        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-        val apk = File(dir, "update.apk")
-        if (apk.exists()) apk.delete()
+    /**
+     * Streams the APK at [downloadUrl] to `cacheDir/updates/update.apk` and returns the file.
+     * [onProgress] is invoked with 0..100 as bytes arrive (only when the server reports a total
+     * size via Content-Length); it is never called for an unknown-length response.
+     */
+    suspend fun download(downloadUrl: String, onProgress: (Int) -> Unit = {}): File =
+        withContext(Dispatchers.IO) {
+            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+            val apk = File(dir, "update.apk")
+            if (apk.exists()) apk.delete()
 
-        val request = Request.Builder()
-            .url(downloadUrl)
-            .build()
+            val request = Request.Builder().url(downloadUrl).build()
 
-        client.newCall(request).execute().use { resp ->
-            if (!resp.isSuccessful) error("Download failed: HTTP ${resp.code}")
-            val body = resp.body ?: error("Empty download body")
-            apk.outputStream().use { out -> body.byteStream().copyTo(out) }
+            client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) error("Download failed: HTTP ${resp.code}")
+                val body = resp.body ?: error("Empty download body")
+                val total = body.contentLength()
+                body.byteStream().use { input ->
+                    apk.outputStream().use { out ->
+                        val buffer = ByteArray(64 * 1024)
+                        var downloaded = 0L
+                        var lastPct = -1
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read == -1) break
+                            out.write(buffer, 0, read)
+                            downloaded += read
+                            if (total > 0) {
+                                val pct = (downloaded * 100 / total).toInt()
+                                if (pct != lastPct) { lastPct = pct; onProgress(pct) }
+                            }
+                        }
+                    }
+                }
+            }
+            apk
         }
-        apk
-    }
 
     /** API 26+: whether the app may currently request package installs. */
     fun canInstall(): Boolean = context.packageManager.canRequestPackageInstalls()
