@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+// Minimal, hand-trimmed subset of the unofficial Starlink dish API, sufficient for
+// Device/Handle with get_device_info (+ get_status fallback).
+//
+// Field numbers are copied verbatim from the community protoset
+// (clarkzjw/starlink-grpc-golang, proto/spacex_api/device/{device,common,dish}.proto) and
+// MUST match the real dish. Extra DeviceInfo fields on the wire are ignored by the lite runtime.
+//
+//   Request.get_device_info  = 1008   Response.get_device_info = 1004
+//   Request.get_status       = 1004   Response.dish_get_status = 2004
+//   DeviceInfo{ id=1, hardware_version=2, software_version=3, country_code=4 }
+package SpaceX.API.Device;
+
+option java_package = "spacex.api.device";
+option java_multiple_files = true;
+
+message DeviceInfo {
+  string id = 1;
+  string hardware_version = 2;
+  string software_version = 3;
+  string country_code = 4;
+}
+
+message DeviceState {
+  uint64 uptime_s = 1;
+}
+
+// Field numbers copied from dish.proto (DishObstructionStats).
+message DishObstructionStats {
+  float fraction_obstructed = 1;
+  float valid_s = 4;
+  bool currently_obstructed = 5;
+  float avg_prolonged_obstruction_duration_s = 6;
+  float time_obstructed = 9;
+}
+
+// Field numbers copied from dish.proto (DishGpsStats).
+message DishGpsStats {
+  bool gps_valid = 1;
+  uint32 gps_sats = 2;
+}
+
+// Curated subset of dish.proto (DishAlerts). Field numbers must match the wire.
+message DishAlerts {
+  bool motors_stuck = 1;
+  bool thermal_shutdown = 2;
+  bool thermal_throttle = 3;
+  bool unexpected_location = 4;
+  bool mast_not_near_vertical = 5;
+  bool slow_ethernet_speeds = 6;
+  bool roaming = 7;
+  bool install_pending = 8;
+  bool is_heating = 9;
+  bool dish_water_detected = 20;
+  bool router_water_detected = 21;
+  bool no_ethernet_link = 23;
+}
+
+message GetDeviceInfoRequest {}
+message GetStatusRequest {}
+
+message GetDeviceInfoResponse {
+  DeviceInfo device_info = 1;
+}
+
+// Trimmed DishGetStatusResponse. Field numbers copied verbatim from dish.proto so the lite runtime
+// decodes the real dish payload by number; every field we don't declare is simply skipped.
+message DishGetStatusResponse {
+  DeviceInfo device_info = 1;
+  DeviceState device_state = 2;
+  float seconds_to_first_nonempty_slot = 1002;
+  float pop_ping_drop_rate = 1003;
+  DishObstructionStats obstruction_stats = 1004;
+  DishAlerts alerts = 1005;
+  float downlink_throughput_bps = 1007;
+  float uplink_throughput_bps = 1008;
+  float pop_ping_latency_ms = 1009;
+  DishGpsStats gps_stats = 1015;
+}
+
+message Request {
+  oneof request {
+    GetDeviceInfoRequest get_device_info = 1008;
+    GetStatusRequest get_status = 1004;
+  }
+}
+
+message Response {
+  oneof response {
+    GetDeviceInfoResponse get_device_info = 1004;
+    DishGetStatusResponse dish_get_status = 2004;
+  }
+}
+
+service Device {
+  rpc Handle (Request) returns (Response) {}
+}

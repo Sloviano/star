@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   The dish exposes a plaintext (cleartext) gRPC server at 192.168.100.1. Cleartext is disabled
+   by default on modern Android, so we allow it only for that one fixed host.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.100.1</domain>
+    </domain-config>
+</network-security-config>
