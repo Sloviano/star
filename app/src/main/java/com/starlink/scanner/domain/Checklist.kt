@@ -20,6 +20,19 @@ data class Checklist(
         ScanTarget.DISH -> dishSerial
     }
 
+    /**
+     * The field to capture next, now that [filled] holds a value: the other field if it is still
+     * empty, otherwise **null** — everything is captured and the scanner should go idle rather than
+     * keep pointing at a field that is already good. Without that, the kit box's other Data Matrix
+     * labels drifting through frame would each offer to replace a correct dish serial.
+     *
+     * Re-scanning stays possible: tapping a signalizer clears that field and aims at it again.
+     */
+    fun nextTarget(filled: ScanTarget): ScanTarget? = when (filled) {
+        ScanTarget.KIT -> ScanTarget.DISH.takeIf { dishSerial.isNullOrBlank() }
+        ScanTarget.DISH -> ScanTarget.KIT.takeIf { kitNumber.isNullOrBlank() }
+    }
+
     /** Put [value] into the field named by [target], returning the updated copy. */
     fun set(target: ScanTarget, value: String): Checklist = when (target) {
         ScanTarget.KIT -> copy(kitNumber = value)

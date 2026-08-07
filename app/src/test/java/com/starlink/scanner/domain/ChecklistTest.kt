@@ -47,4 +47,29 @@ class ChecklistTest {
         assertEquals("KIT-1", list.valueOf(ScanTarget.KIT))
         assertNull(list.valueOf(ScanTarget.DISH))
     }
+
+    @Test
+    fun nextTarget_advancesToTheStillEmptyField() {
+        val kitOnly = Checklist(kitNumber = "KIT-1")
+        assertEquals(ScanTarget.DISH, kitOnly.nextTarget(ScanTarget.KIT))
+
+        // Guided order is kit → dish, but a re-scan can fill dish first.
+        val dishOnly = Checklist(dishSerial = "DISH-1")
+        assertEquals(ScanTarget.KIT, dishOnly.nextTarget(ScanTarget.DISH))
+    }
+
+    @Test
+    fun nextTarget_isNullOnceBothAreCaptured() {
+        val full = Checklist(kitNumber = "KIT-1", dishSerial = "DISH-1")
+        // Null puts the scanner idle, so a stray label in frame can't overwrite a good value.
+        assertNull(full.nextTarget(ScanTarget.KIT))
+        assertNull(full.nextTarget(ScanTarget.DISH))
+    }
+
+    @Test
+    fun nextTarget_reopensTheFieldClearedForRescan() {
+        val full = Checklist(kitNumber = "KIT-1", dishSerial = "DISH-1")
+        // Tapping the dish signalizer clears it; filling the kit again must aim back at the gap.
+        assertEquals(ScanTarget.DISH, full.clear(ScanTarget.DISH).nextTarget(ScanTarget.KIT))
+    }
 }

@@ -37,8 +37,12 @@ sealed interface CaptureUiState {
         val attempts: Int = 0,
         /** Scanned kit number + dish serial. */
         val checklist: Checklist = Checklist(),
-        /** The field the next accepted scan fills (guided capture — kit and dish look identical). */
-        val target: ScanTarget = ScanTarget.KIT,
+        /**
+         * The field the next accepted scan fills (guided capture — kit and dish look identical), or
+         * null once both are captured: scanning goes idle until a signalizer is tapped to re-open a
+         * field. Null therefore implies [Checklist.canFinish].
+         */
+        val target: ScanTarget? = ScanTarget.KIT,
         /** A just-scanned code awaiting the technician's Accept/No confirmation, or null. */
         val pendingScan: PendingScan? = null,
     ) : CaptureUiState {

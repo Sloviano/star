@@ -196,6 +196,9 @@ class CaptureViewModel(
      *
      * The camera reports the same code many times per second and, after we advance, the just-scanned
      * code lingers in frame, so we:
+     *  - ignore everything once both fields are captured (null target) — the kit box carries further
+     *    Data Matrix labels, and any of them drifting through frame would otherwise prompt to
+     *    replace a value that is already correct;
      *  - reject non–Data Matrix reads (both the kit and dish labels are Data Matrix);
      *  - ignore any value already captured in the checklist, which debounces repeat frames *and*
      *    stops the lingering previous code from refilling the next field;
@@ -203,6 +206,7 @@ class CaptureViewModel(
      */
     fun onScan(raw: String, format: BarcodeFormat) {
         val current = _state.value as? CaptureUiState.Capturing ?: return
+        val target = current.target ?: return // everything captured — scanner is idle
         if (format != BarcodeFormat.DATA_MATRIX) return
         if (current.pendingScan != null) return // a code is already awaiting Accept/No confirmation
 
@@ -213,7 +217,7 @@ class CaptureViewModel(
 
         // Hold the scan for confirmation instead of committing it, so a mis-aimed read can be
         // rejected before it fills the field. Beep so the tech knows a code was captured to review.
-        _state.value = current.copy(pendingScan = CaptureUiState.PendingScan(current.target, value))
+        _state.value = current.copy(pendingScan = CaptureUiState.PendingScan(target, value))
         _scanEvents.tryEmit(Unit)
     }
 
@@ -222,9 +226,10 @@ class CaptureViewModel(
         val current = _state.value as? CaptureUiState.Capturing ?: return
         val pending = current.pendingScan ?: return
         lastRejected = null
+        val checklist = current.checklist.set(pending.target, pending.value)
         _state.value = current.copy(
-            checklist = current.checklist.set(pending.target, pending.value),
-            target = nextTarget(pending.target),
+            checklist = checklist,
+            target = checklist.nextTarget(pending.target),
             pendingScan = null,
         )
     }
@@ -264,17 +269,12 @@ class CaptureViewModel(
     /** Commit [value] into [target], advance to the next field, and pulse capture feedback. */
     private fun fill(target: ScanTarget, value: String) {
         val current = _state.value as? CaptureUiState.Capturing ?: return
+        val checklist = current.checklist.set(target, value)
         _state.value = current.copy(
-            checklist = current.checklist.set(target, value),
-            target = nextTarget(target),
+            checklist = checklist,
+            target = checklist.nextTarget(target),
         )
         _scanEvents.tryEmit(Unit)
-    }
-
-    /** Guided order: kit → dish; the dish step is the last one. */
-    private fun nextTarget(from: ScanTarget): ScanTarget = when (from) {
-        ScanTarget.KIT -> ScanTarget.DISH
-        ScanTarget.DISH -> ScanTarget.DISH
     }
 
     /** All three signalizers ready → build the record and move to Summary, flagging duplicates. */
