@@ -36,6 +36,21 @@ MVVM + unidirectional state. `ViewModel`s expose `StateFlow<UiState>`; Compose c
 
 Requires JDK 17. minSdk 26.
 
+## Database migrations (Module 4)
+
+Records live in Room until they upload, so an unsynced record is field work that exists nowhere
+else. The database therefore has **no blanket destructive fallback**: only the never-shipped schema
+versions 1 and 2 may be recreated (`AppDatabase.LEGACY_VERSIONS`), and any other missing migration
+throws at open time instead of dropping the table.
+
+Changing `ScanRecord` means:
+
+1. Bump `version` in `@Database`.
+2. Build once — Room writes the new schema JSON to `app/schemas/`. Commit it.
+3. Add the `Migration(old, new)` to `AppDatabase.MIGRATIONS`.
+
+Skipping step 3 fails at runtime on any device that has the old schema, which is the point.
+
 ## Proto generation (Module 1)
 
 The gRPC stubs are generated from a hand-trimmed subset of the unofficial dish API in

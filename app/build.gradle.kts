@@ -63,6 +63,13 @@ android {
     }
 }
 
+// Room writes the current schema here on every build. The JSON is checked in: it is what a future
+// migration is written against and verified by, now that a missing migration is a hard failure
+// instead of a silent table drop (see AppDatabase).
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 protobuf {
     protoc { artifact = libs.protobuf.protoc.get().toString() }
     plugins {

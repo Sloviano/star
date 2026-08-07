@@ -64,8 +64,11 @@ object ServiceLocator {
     fun init(context: Context) {
         appContext = context.applicationContext
         database = Room.databaseBuilder(appContext, AppDatabase::class.java, "starlink-scanner.db")
-            // Pre-release: no field data to preserve, so recreate on schema change (added dishJson).
-            .fallbackToDestructiveMigration(dropAllTables = true)
+            .addMigrations(*AppDatabase.MIGRATIONS)
+            // Only the pre-release schemas may be recreated. Every other missing migration is a bug
+            // that must fail loudly here rather than quietly drop records the technician captured
+            // offline and hasn't uploaded yet.
+            .fallbackToDestructiveMigrationFrom(true, *AppDatabase.LEGACY_VERSIONS)
             .build()
         scanDao = database.scanDao()
         settingsRepository = SettingsRepository(appContext)
