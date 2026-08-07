@@ -13,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.starlink.scanner.data.update.UpdateStatus
@@ -62,12 +63,16 @@ fun UpdateDialog(
                 }
             }
         },
+        // All three actions go in confirmButton as one end-aligned stack. Splitting them across
+        // confirmButton/dismissButton put "Later" and "Update" on one row with "Skip this version"
+        // dangling under "Later" — the dialog lays those two slots out side by side, so a Column in
+        // one of them wraps under only that half. Three actions don't fit on a single line at this
+        // width, and stacking them right-aligned with the primary on top is the documented Material
+        // fallback for exactly that case.
         confirmButton = {
-            if (!downloading) TextButton(onClick = onUpdate) { Text("Update") }
-        },
-        dismissButton = {
             if (!downloading) {
-                Column {
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(onClick = onUpdate) { Text("Update") }
                     TextButton(onClick = onLater) { Text("Later") }
                     TextButton(onClick = onSkip) { Text("Skip this version") }
                 }
