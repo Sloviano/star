@@ -72,6 +72,11 @@ class UpdateViewModel(
     private suspend fun runCheck(): UpdateStatus {
         val status = checker.check(currentVersionCode)
         settings.setLastUpdateCheck(System.currentTimeMillis())
+        // UpToDate means the installed build is already the latest, so any APK still in the cache
+        // belongs to an install that finished — dead weight worth tens of megabytes. This is the one
+        // moment we know no install is pending, which is why the cleanup lives here and not next to
+        // the install call (see [ApkInstaller.clearDownloads]).
+        if (status is UpdateStatus.UpToDate) installer.clearDownloads()
         return status
     }
 

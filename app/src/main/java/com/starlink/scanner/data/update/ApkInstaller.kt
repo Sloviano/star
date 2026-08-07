@@ -29,7 +29,7 @@ class ApkInstaller(
      */
     suspend fun download(downloadUrl: String, onProgress: (Int) -> Unit = {}): File =
         withContext(Dispatchers.IO) {
-            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+            val dir = updatesDir().apply { mkdirs() }
             val apk = File(dir, "update.apk")
             if (apk.exists()) apk.delete()
 
@@ -59,6 +59,23 @@ class ApkInstaller(
             }
             apk
         }
+
+    /**
+     * Delete any APK left in the cache by an earlier update. The download is tens of megabytes and
+     * nothing removes it once the install is done, so it would otherwise sit on the device until
+     * some later update happened to overwrite it.
+     *
+     * Only call this when no install can still be pending: the system installer reads the file
+     * through the FileProvider *after* [install] returns, so deleting it while the user is still
+     * looking at the installer would break that install. See the call site in
+     * [com.starlink.scanner.ui.update.UpdateViewModel].
+     */
+    suspend fun clearDownloads() = withContext(Dispatchers.IO) {
+        updatesDir().listFiles()?.forEach { it.delete() }
+        Unit
+    }
+
+    private fun updatesDir(): File = File(context.cacheDir, "updates")
 
     /** API 26+: whether the app may currently request package installs. */
     fun canInstall(): Boolean = context.packageManager.canRequestPackageInstalls()
