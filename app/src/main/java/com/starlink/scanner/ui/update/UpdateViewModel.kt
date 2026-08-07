@@ -9,6 +9,7 @@ import com.starlink.scanner.data.update.ApkInstaller
 import com.starlink.scanner.data.update.UpdateChecker
 import com.starlink.scanner.data.update.UpdateStatus
 import com.starlink.scanner.di.ServiceLocator
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -91,16 +92,28 @@ class UpdateViewModel(
         viewModelScope.launch {
             _downloading.value = true
             _downloadProgress.value = -1
-            try {
-                val apk = installer.download(available.apkDownloadUrl) { pct ->
+
+            // Downloading and handing off to the installer fail for unrelated reasons and are
+            // reported separately: folding them into one catch made "startActivity threw" read as
+            // "Download failed", pointing at the network when the download had in fact succeeded.
+            val apk = try {
+                installer.download(available.apkDownloadUrl) { pct ->
                     _downloadProgress.value = pct
                 }
-                _prompt.value = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _downloading.value = false
+                _messages.emit("Download failed: ${e.message ?: "unknown error"}")
+                return@launch
+            }
+
+            _prompt.value = null
+            _downloading.value = false
+            try {
                 installer.install(apk)
             } catch (e: Exception) {
-                _messages.emit("Download failed: ${e.message ?: "unknown error"}")
-            } finally {
-                _downloading.value = false
+                _messages.emit("Couldn't open the installer: ${e.message ?: "unknown error"}")
             }
         }
     }
