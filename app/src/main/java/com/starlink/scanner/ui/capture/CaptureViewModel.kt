@@ -115,6 +115,10 @@ class CaptureViewModel(
      * That way the signalizers track reality: when the dish is unplugged / the phone leaves the dish
      * WiFi, the probe fails and the dish-ID signalizer and the "Dish connected" strip revert to their
      * disconnected state; when reachable again it re-reads the ID. Polls every [POLL_INTERVAL_MS].
+     *
+     * The loop runs for the whole capture, so it must not emit a new state on every tick: an idle
+     * poll that changes nothing visible would recompose the capture screen every few seconds for the
+     * entire session. Both state writers below no-op when the render would be identical.
      */
     private suspend fun detectLoop() {
         var attempts = 0
@@ -122,7 +126,6 @@ class CaptureViewModel(
             val current = _state.value
             if (current !is CaptureUiState.Capturing) return
 
-            attempts++
             val network = currentNetwork
             if (!reachability.isReachable(network)) {
                 // Off the dish LAN. If the ID had already been read, revert it (and the strip) to the
@@ -132,8 +135,11 @@ class CaptureViewModel(
                 } else {
                     CaptureUiState.SearchPhase.NO_DISH
                 }
+                // The counter spans one reachable stretch, so "attempt N" means N tries at *this*
+                // dish rather than a tally of every poll since the screen opened.
+                attempts = 0
                 SessionState.dishConnection.value = DishConnection.NONE
-                setDisconnected(phase, attempts)
+                setDisconnected(phase)
                 delay(POLL_INTERVAL_MS)
                 continue
             }
@@ -146,6 +152,7 @@ class CaptureViewModel(
             }
 
             // On the dish LAN but no ID yet — read it over gRPC.
+            attempts++
             SessionState.dishConnection.value = DishConnection.SEARCHING
             updateConnection(CaptureUiState.SearchPhase.CONNECTING, attempts)
             starlink.getDishInfo(network).onSuccess { info ->
@@ -157,20 +164,29 @@ class CaptureViewModel(
         }
     }
 
-    /** Update only the connection phase/attempts, leaving any scanned fields untouched. */
+    /**
+     * Update only the connection phase/attempts, leaving any scanned fields untouched. The attempt
+     * count is on screen during [CaptureUiState.SearchPhase.CONNECTING], so each try really is a new
+     * render — but skip the write when neither field moved.
+     */
     private fun updateConnection(phase: CaptureUiState.SearchPhase, attempts: Int) {
         val current = _state.value as? CaptureUiState.Capturing ?: return
         if (current.dishId != null) return
+        if (current.phase == phase && current.attempts == attempts) return
         _state.value = current.copy(phase = phase, attempts = attempts)
     }
 
     /**
      * Dish dropped off the LAN: clear the read dish ID and reset the phase/attempts, leaving the
      * scanned kit & dish-serial fields intact. No feedback pulse — that's reserved for new fills.
+     *
+     * While disconnected this is the common case on every poll, so it returns without emitting once
+     * the state already says so.
      */
-    private fun setDisconnected(phase: CaptureUiState.SearchPhase, attempts: Int) {
+    private fun setDisconnected(phase: CaptureUiState.SearchPhase) {
         val current = _state.value as? CaptureUiState.Capturing ?: return
-        _state.value = current.copy(dishId = null, phase = phase, attempts = attempts)
+        if (current.dishId == null && current.phase == phase && current.attempts == 0) return
+        _state.value = current.copy(dishId = null, phase = phase, attempts = 0)
     }
 
     /** Commit the dish ID into the signalizer and pulse capture feedback. */
