@@ -6,6 +6,11 @@
  * and simply returns { status: "ok", count: 0 } without writing anything. Requests must carry the
  * shared secret; see SHARED_SECRET.
  *
+ * Appends are idempotent: each record carries an "uploadKey", stored alongside it, and a record
+ * whose key is already in the sheet is skipped. The app retries a batch whenever it doesn't see a
+ * success response — including when the rows did land — so without this, a dropped response would
+ * duplicate every record in that batch.
+ *
  * Deploy: Extensions ▸ Apps Script ▸ Deploy ▸ New deployment ▸ Web app,
  *   Execute as: Me, Who has access: Anyone. Copy the /exec URL into the app's Settings.
  *   After ANY edit you must publish a NEW VERSION (Manage deployments ▸ Edit ▸ Version: New version),
@@ -34,7 +39,11 @@ var SHEET_NAME = 'Scans';
 // token, so treat it as "the URL alone is not enough", not as real authentication.
 var SHARED_SECRET = '';
 
-var HEADER = ['Timestamp', 'Dish ID', 'Kit Number', 'Dish Serial'];
+var HEADER = ['Timestamp', 'Dish ID', 'Kit Number', 'Dish Serial', 'Upload Key'];
+
+// Column holding each record's idempotency key (1-based). Rows whose key is already present are
+// skipped, so a batch the app re-sends after a lost response cannot be appended twice.
+var KEY_COLUMN = 5;
 
 function doPost(e) {
   try {
@@ -81,20 +90,59 @@ function doPost(e) {
   }
 }
 
-/** Map records to rows and append them in one batched write. Returns the number of rows written. */
+/**
+ * Map records to rows and append them in one batched write, skipping any record whose upload key is
+ * already in the sheet. Returns the number of rows actually written — a batch that is entirely
+ * duplicates writes 0 rows and still reports ok, which is what tells the app to stop retrying it.
+ *
+ * Reading the existing keys and appending must not interleave with a second request doing the same,
+ * so the whole read-modify-write is taken under the script lock.
+ */
 function appendRows(items) {
-  var sheet = getSheet();
-  var rows = items.map(function (d) {
-    return [
-      d.timestamp ? new Date(d.timestamp) : '',
-      d.dishId || '',
-      d.kitNumber || '',
-      d.dishSerial || ''
-    ];
-  });
-  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
-  SpreadsheetApp.flush(); // force the write before the request returns
-  return rows.length;
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var sheet = getSheet();
+    var seen = existingKeys(sheet);
+    var rows = [];
+
+    items.forEach(function (d) {
+      var key = d.uploadKey ? String(d.uploadKey) : '';
+      // Records from an app build that predates upload keys are always written — without a key
+      // there is nothing to deduplicate on.
+      if (key) {
+        if (seen[key]) return;
+        seen[key] = true;
+      }
+      rows.push([
+        d.timestamp ? new Date(d.timestamp) : '',
+        d.dishId || '',
+        d.kitNumber || '',
+        d.dishSerial || '',
+        key
+      ]);
+    });
+
+    if (rows.length === 0) return 0;
+    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, HEADER.length).setValues(rows);
+    SpreadsheetApp.flush(); // force the write before the request returns
+    return rows.length;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Set of upload keys already written, read from the key column. */
+function existingKeys(sheet) {
+  var keys = {};
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return keys; // header only (or empty)
+  var values = sheet.getRange(2, KEY_COLUMN, lastRow - 1, 1).getValues();
+  for (var i = 0; i < values.length; i++) {
+    var key = values[i][0];
+    if (key) keys[String(key)] = true;
+  }
+  return keys;
 }
 
 /** Resolve the target spreadsheet (by id, or the bound one) and the Scans tab, creating it if new. */
@@ -107,6 +155,13 @@ function getSheet() {
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);
     sheet.appendRow(HEADER);
+    return sheet;
+  }
+  // Sheets created before upload keys existed have a 4-column header; label the key column so the
+  // tab is self-describing. Existing rows keep an empty key and are never treated as duplicates.
+  var keyHeader = sheet.getRange(1, KEY_COLUMN).getValue();
+  if (!keyHeader) {
+    sheet.getRange(1, KEY_COLUMN).setValue(HEADER[KEY_COLUMN - 1]);
   }
   return sheet;
 }

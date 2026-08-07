@@ -30,9 +30,14 @@ interface ScanDao {
     @Query("SELECT COUNT(*) FROM scan_records WHERE dishId = :dishId AND kitNumber = :kitNumber")
     suspend fun countMatching(dishId: String, kitNumber: String): Int
 
-    @Query("UPDATE scan_records SET status = 'SENT' WHERE id = :id")
-    suspend fun markSent(id: Long)
+    /**
+     * Settle a whole uploaded batch in one statement. Per-row updates could be interrupted partway
+     * (process death, worker cancellation), leaving accepted records still PENDING and re-sent on
+     * the next run; a single UPDATE either applies to the batch or to none of it.
+     */
+    @Query("UPDATE scan_records SET status = 'SENT' WHERE id IN (:ids)")
+    suspend fun markSent(ids: List<Long>)
 
-    @Query("UPDATE scan_records SET status = 'FAILED', attempts = attempts + 1 WHERE id = :id")
-    suspend fun markFailed(id: Long)
+    @Query("UPDATE scan_records SET status = 'FAILED', attempts = attempts + 1 WHERE id IN (:ids)")
+    suspend fun markFailed(ids: List<Long>)
 }

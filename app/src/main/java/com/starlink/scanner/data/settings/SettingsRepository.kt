@@ -10,7 +10,9 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.starlink.scanner.BuildConfig
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.util.UUID
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
@@ -24,6 +26,7 @@ class SettingsRepository(private val context: Context) {
         val AUTO_UPDATE_CHECK = booleanPreferencesKey("auto_update_check")
         val SKIPPED_VERSION_CODE = longPreferencesKey("skipped_version_code")
         val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
+        val INSTALL_ID = stringPreferencesKey("install_id")
     }
 
     val sheetsUrl: Flow<String> = context.dataStore.data
@@ -48,6 +51,24 @@ class SettingsRepository(private val context: Context) {
     /** Record (or, with a blank string, clear) the last upload failure reason. */
     suspend fun setLastUploadError(reason: String) {
         context.dataStore.edit { it[Keys.LAST_UPLOAD_ERROR] = reason }
+    }
+
+    /**
+     * Stable identifier for this install, generated on first use. Paired with a record's local row
+     * id it forms the upload key that lets the backend recognize a re-sent record and refuse to
+     * append it twice (see [com.starlink.scanner.data.upload.UploadRunner]). Row ids alone would
+     * collide across installs, which all write into the same sheet.
+     */
+    suspend fun installId(): String {
+        context.dataStore.data.first()[Keys.INSTALL_ID]?.takeIf { it.isNotBlank() }?.let { return it }
+        val generated = UUID.randomUUID().toString()
+        var result = generated
+        // The edit block is atomic, so a concurrent generator either sees our value or we see theirs.
+        context.dataStore.edit { prefs ->
+            val existing = prefs[Keys.INSTALL_ID]
+            if (existing.isNullOrBlank()) prefs[Keys.INSTALL_ID] = generated else result = existing
+        }
+        return result
     }
 
     // --- In-app updater (Module 6) ---

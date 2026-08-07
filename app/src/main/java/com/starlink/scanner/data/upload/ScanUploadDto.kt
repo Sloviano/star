@@ -14,6 +14,12 @@ data class ScanUploadDto(
     val dishId: String,
     val kitNumber: String,
     val dishSerial: String,
+    /**
+     * Idempotency key: `<installId>:<row id>`, stable across retries of the same record. The backend
+     * stores it and skips a record whose key it has already written, so a batch re-sent after a lost
+     * response doesn't duplicate rows.
+     */
+    val uploadKey: String,
 )
 
 /**
@@ -33,9 +39,10 @@ data class DryRunDto(
     val dryRun: Boolean = true,
 )
 
-fun ScanRecord.toUploadDto(): ScanUploadDto = ScanUploadDto(
+fun ScanRecord.toUploadDto(installId: String): ScanUploadDto = ScanUploadDto(
     timestamp = timestamp,
     dishId = dishId,
     kitNumber = kitNumber,
     dishSerial = dishSerial,
+    uploadKey = "$installId:$id",
 )
