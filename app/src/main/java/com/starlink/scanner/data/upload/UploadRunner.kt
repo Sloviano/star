@@ -3,8 +3,6 @@ package com.starlink.scanner.data.upload
 import com.starlink.scanner.data.local.ScanDao
 import com.starlink.scanner.data.settings.SettingsRepository
 import kotlinx.coroutines.flow.first
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.json.Json
 
 /** Outcome of one upload attempt — shared by the background worker and the manual "Sync now". */
 sealed interface SyncResult {
@@ -34,7 +32,6 @@ class UploadRunner(
     private val settings: SettingsRepository,
     private val uploader: SheetsUploader,
 ) {
-    private val json = Json { encodeDefaults = true }
 
     suspend fun run(): SyncResult {
         val pending = dao.pending()
@@ -43,12 +40,7 @@ class UploadRunner(
         val url = settings.sheetsUrl.first().trim()
         if (url.isBlank()) return SyncResult.NoUrl
 
-        val body = json.encodeToString(
-            ListSerializer(ScanUploadDto.serializer()),
-            pending.map { it.toUploadDto() },
-        )
-
-        return when (val outcome = uploader.post(url, body)) {
+        return when (val outcome = uploader.postBatch(url, pending.map { it.toUploadDto() })) {
             is UploadOutcome.Success -> {
                 pending.forEach { dao.markSent(it.id) }
                 settings.setLastUploadTime(System.currentTimeMillis())

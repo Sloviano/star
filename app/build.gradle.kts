@@ -10,6 +10,13 @@ val localProps: Properties = Properties().apply {
 // Default Apps Script endpoint. Empty when unset — the runtime Settings value always overrides it.
 val defaultSheetsUrl: String = localProps.getProperty("SHEETS_URL")?.trim().orEmpty()
 
+// Shared secret sent with every POST to the Apps Script Web App. The deployment is "Anyone"-access
+// and unauthenticated, so without this the /exec URL alone grants write access to the sheet — and
+// that URL travels widely (configs, chats, anyone who builds the app). Must match SHARED_SECRET in
+// apps-script/Code.gs. Empty when unset, which the backend accepts. Use a hex secret
+// (`openssl rand -hex 32`) — the value is interpolated into a generated Java string literal.
+val sheetsToken: String = localProps.getProperty("SHEETS_TOKEN")?.trim().orEmpty()
+
 // In-app updater (Module 6): the PUBLIC GitHub repo ("owner/repo") that hosts release APKs. Public,
 // so the app checks it anonymously — no auth token ships in the APK. Not a secret.
 val githubRepo: String = localProps.getProperty("GITHUB_REPO")?.trim().orEmpty()
@@ -41,6 +48,9 @@ android {
 
         // Default Apps Script Web App endpoint (from local.properties); override in Settings at runtime.
         buildConfigField("String", "DEFAULT_SHEETS_URL", "\"$defaultSheetsUrl\"")
+
+        // Shared secret authenticating uploads to that endpoint (from local.properties).
+        buildConfigField("String", "SHEETS_TOKEN", "\"$sheetsToken\"")
 
         // In-app updater: public "owner/repo" hosting release APKs (from local.properties).
         buildConfigField("String", "GITHUB_REPO", "\"$githubRepo\"")

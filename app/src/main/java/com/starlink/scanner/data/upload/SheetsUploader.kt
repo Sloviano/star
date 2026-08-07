@@ -1,5 +1,6 @@
 package com.starlink.scanner.data.upload
 
+import com.starlink.scanner.BuildConfig
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -25,19 +26,36 @@ sealed interface UploadOutcome {
 }
 
 /**
- * Posts a JSON batch to a Google Apps Script Web App (`/exec`). Apps Script answers `/exec` with a
- * 302 to `script.googleusercontent.com` before the real 200, so redirects must be followed.
+ * Client for the Google Apps Script Web App (`/exec`). Apps Script answers `/exec` with a 302 to
+ * `script.googleusercontent.com` before the real 200, so redirects must be followed.
+ *
+ * Every request goes out through [post], which is private — the two public entry points build their
+ * own body and always stamp [token] into it. That is deliberate: the endpoint is deployed
+ * "Anyone"-access, so an unauthenticated request path would be a hole in the only thing guarding the
+ * sheet.
  *
  * The call is wrapped in [suspendCancellableCoroutine] so it is a first-class `suspend` function and
  * cancels the in-flight request when the coroutine is cancelled (e.g. WorkManager stops the worker).
  */
 class SheetsUploader(
+    private val token: String = BuildConfig.SHEETS_TOKEN,
     private val client: OkHttpClient = defaultClient(),
-    private val json: Json = Json { ignoreUnknownKeys = true },
+    private val json: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true },
 ) {
 
-    /** POST [body] (already-serialized JSON, typically an array) to [url]. */
-    suspend fun post(url: String, body: String): UploadOutcome {
+    /** POST a batch of records for appending. */
+    suspend fun postBatch(url: String, records: List<ScanUploadDto>): UploadOutcome =
+        post(url, json.encodeToString(ScanBatchDto.serializer(), ScanBatchDto(token, records)))
+
+    /**
+     * Body for Settings ▸ Test connection. The backend checks the secret and exercises the real
+     * spreadsheet + tab resolution (the code path that actually fails in the field), then returns ok
+     * without writing a row — so this also reports a token that doesn't match the deployment.
+     */
+    suspend fun postDryRun(url: String): UploadOutcome =
+        post(url, json.encodeToString(DryRunDto.serializer(), DryRunDto(token)))
+
+    private suspend fun post(url: String, body: String): UploadOutcome {
         val request = Request.Builder()
             .url(url)
             .post(body.toRequestBody(JSON_MEDIA_TYPE))
@@ -70,13 +88,6 @@ class SheetsUploader(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
-
-        /**
-         * Body for Settings ▸ Test connection. The backend recognizes it, exercises the real
-         * spreadsheet + tab resolution (the code path that actually fails in the field), and returns
-         * ok without writing a row. Requires the updated `apps-script/Code.gs`.
-         */
-        const val DRY_RUN_BODY = "{\"dryRun\":true}"
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .followRedirects(true)          // Apps Script /exec replies 302 first.

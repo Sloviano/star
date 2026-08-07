@@ -16,6 +16,23 @@ data class ScanUploadDto(
     val dishSerial: String,
 )
 
+/**
+ * Envelope wrapping a batch with the shared secret. The Web App is deployed "Anyone"-access and
+ * cannot read custom HTTP headers, so the secret travels in the body.
+ */
+@Serializable
+data class ScanBatchDto(
+    val token: String,
+    val records: List<ScanUploadDto>,
+)
+
+/** Settings ▸ Test connection probe: authenticates and resolves the sheet, but writes no row. */
+@Serializable
+data class DryRunDto(
+    val token: String,
+    val dryRun: Boolean = true,
+)
+
 fun ScanRecord.toUploadDto(): ScanUploadDto = ScanUploadDto(
     timestamp = timestamp,
     dishId = dishId,

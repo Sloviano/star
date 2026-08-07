@@ -1,9 +1,10 @@
 /**
  * Google Apps Script Web App backend for the Starlink Kit Provisioning Scanner.
  *
- * Receives a JSON array of scan records POSTed by the Android app's UploadWorker and appends one
- * row per record to the "Scans" sheet. An empty array ("[]") is a valid connectivity test ping and
- * simply returns { status: "ok", count: 0 } without writing anything.
+ * Receives scan records POSTed by the Android app's UploadWorker as { token, records: [...] } and
+ * appends one row per record to the "Scans" sheet. An empty batch is a valid connectivity test ping
+ * and simply returns { status: "ok", count: 0 } without writing anything. Requests must carry the
+ * shared secret; see SHARED_SECRET.
  *
  * Deploy: Extensions ▸ Apps Script ▸ Deploy ▸ New deployment ▸ Web app,
  *   Execute as: Me, Who has access: Anyone. Copy the /exec URL into the app's Settings.
@@ -20,6 +21,19 @@ var SHEET_ID = '';
 // The tab that receives rows. Auto-created with a header row if missing.
 var SHEET_NAME = 'Scans';
 
+// Shared secret the app must present in the request body, matching SHEETS_TOKEN in the Android
+// build's local.properties. The deployment is "Anyone"-access and unauthenticated, so without this
+// the /exec URL by itself is write access to your sheet — and that URL travels widely.
+//
+// Leave '' to accept unauthenticated posts (the original behaviour). When turning it on, roll out
+// the app build that sends the token FIRST, then set it here: the reverse order rejects uploads
+// from installed builds until they are updated. (Their records stay PENDING and retry, so nothing
+// is lost — but technicians stop syncing in the meantime.)
+//
+// This raises the bar; it does not make the endpoint secret. Anyone holding the APK can extract the
+// token, so treat it as "the URL alone is not enough", not as real authentication.
+var SHARED_SECRET = '';
+
 var HEADER = ['Timestamp', 'Dish ID', 'Kit Number', 'Dish Serial'];
 
 function doPost(e) {
@@ -30,14 +44,31 @@ function doPost(e) {
 
     var parsed = JSON.parse(e.postData.contents);
 
+    // Current builds post an envelope: { token, records } or { token, dryRun }. A bare array is the
+    // pre-token payload from an older build, which carries no token.
+    var isEnvelope = parsed && !Array.isArray(parsed) && typeof parsed === 'object';
+
+    if (SHARED_SECRET && (!isEnvelope || parsed.token !== SHARED_SECRET)) {
+      // Apps Script cannot set a status code, so this is a 200 the app reads as a failure: it keeps
+      // the records and retries. The reason surfaces in Settings ▸ Diagnostics ▸ Last upload error.
+      return json({ status: 'error', message: 'Unauthorized' });
+    }
+
     // Connectivity probe from the app's Settings ▸ Test connection. Resolves the spreadsheet and the
     // Scans tab (creating the tab if missing) to prove the real write path works — but persists no row.
-    if (parsed && !Array.isArray(parsed) && parsed.dryRun === true) {
+    if (isEnvelope && parsed.dryRun === true) {
       getSheet();
       return json({ status: 'ok', count: 0, dryRun: true });
     }
 
-    var items = Array.isArray(parsed) ? parsed : [parsed];
+    var items;
+    if (isEnvelope) {
+      items = Array.isArray(parsed.records) ? parsed.records : [];
+    } else if (Array.isArray(parsed)) {
+      items = parsed;
+    } else {
+      items = [parsed];
+    }
     if (items.length === 0) {
       return json({ status: 'ok', count: 0 });
     }

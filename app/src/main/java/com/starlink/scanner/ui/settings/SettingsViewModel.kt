@@ -67,8 +67,8 @@ class SettingsViewModel(
                     TestResult.Error("URL should look like script.google.com/macros/s/…/exec")
                 return@launch
             }
-            // Dry-run: exercises the real spreadsheet write path on the backend, persisting no row.
-            _testResult.value = when (val outcome = uploader.post(url, SheetsUploader.DRY_RUN_BODY)) {
+            // Dry-run: authenticates and exercises the real spreadsheet write path, persisting no row.
+            _testResult.value = when (val outcome = uploader.postDryRun(url)) {
                 is UploadOutcome.Success -> TestResult.Ok("Connected — sheet reachable")
                 is UploadOutcome.Failed -> TestResult.Error(outcome.reason)
             }
