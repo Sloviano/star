@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -23,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -47,11 +49,16 @@ fun SettingsScreen(
     val autoJoinDishWifi by viewModel.autoJoinDishWifi.collectAsStateWithLifecycle()
     val autoJoinResult by viewModel.autoJoinResult.collectAsStateWithLifecycle()
     val dishSsid by viewModel.dishSsid.collectAsStateWithLifecycle()
+    val nextCounter by viewModel.nextCounter.collectAsStateWithLifecycle()
+    val counterResult by viewModel.counterResult.collectAsStateWithLifecycle()
 
     var url by remember { mutableStateOf(savedUrl) }
+    var counter by remember { mutableStateOf(nextCounter.toString()) }
 
-    // Seed the editable field once the persisted value arrives.
+    // Seed the editable fields once the persisted values arrive — and, for the counter, whenever it
+    // advances after a save, so reopening Settings shows the number the next record will really use.
     LaunchedEffect(savedUrl) { url = savedUrl }
+    LaunchedEffect(nextCounter) { counter = nextCounter.toString() }
 
     Column(
         modifier
@@ -78,6 +85,32 @@ fun SettingsScreen(
         ) { Text(if (testResult is TestResult.Testing) "Testing…" else "Test connection") }
 
         TestResultLine(testResult)
+
+        Spacer(Modifier.height(24.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(16.dp))
+
+        Text("Row counter", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = counter,
+            onValueChange = { counter = it.filter(Char::isDigit) },
+            singleLine = true,
+            label = { Text("Next number") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            "The first column of each sheet row. Set it to any starting number; every kit you save " +
+                "takes the next one and adds 1.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Button(
+            onClick = { viewModel.setNextCounter(counter) },
+            modifier = Modifier.fillMaxWidth().height(56.dp).padding(top = 8.dp),
+        ) { Text("Save counter") }
+        TestResultLine(counterResult)
 
         if (viewModel.canSuggestWifi) {
             Spacer(Modifier.height(24.dp))

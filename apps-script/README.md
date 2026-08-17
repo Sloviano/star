@@ -10,13 +10,20 @@ enable the shared secret (step 4), a matching `SHEETS_TOKEN` baked into the buil
 2. Rename the first tab to **`Scans`** (must match `SHEET_NAME` in `Code.gs`).
 3. Add this header row in row 1:
 
-   | Timestamp | Dish ID | Kit Number | Dish Serial | Upload Key |
-   |-----------|---------|------------|-------------|------------|
+   | Counter | Dish ID | Kit Number | Dish Serial |
+   |---------|---------|------------|-------------|
 
-   **Upload Key** holds each record's idempotency key; `doPost` skips a record whose key is already
-   present. Leave the column in place — clearing it lets a retried batch append duplicate rows.
-   (An existing sheet with only the first four columns is fine: the script labels the fifth column
-   on the next post, and rows already there keep an empty key.)
+   **Counter** is the app's row counter (**Settings ▸ Row counter**): a number the technician sets to
+   any starting value, advancing by one per saved kit.
+
+   On an existing sheet:
+
+   - Column A used to be **Timestamp**. The script relabels that header on the next post; rows
+     written earlier keep their dates, and a record saved before the counter existed still uploads
+     its timestamp there rather than a blank.
+   - Column E used to be **Upload Key**. Nothing is written there any more — delete the column when
+     you like; the script leaves it alone. Removing it also removed duplicate protection, see
+     [Duplicate rows](#duplicate-rows).
 
 ## 2. Add the script
 
@@ -74,15 +81,19 @@ The app POSTs an envelope carrying the shared secret and one batch (= all not-ye
   "token": "<SHARED_SECRET>",
   "records": [
     {
+      "counter": 128,
       "timestamp": 1731000000000,
       "dishId": "ut01000000-00000000-00001234",
       "kitNumber": "KIT-123456",
-      "dishSerial": "DISH-...",
-      "uploadKey": "3f8c…-c21a:47"
+      "dishSerial": "DISH-..."
     }
   ]
 }
 ```
+
+`counter` fills column A. `timestamp` is still sent as the fallback for it: a record from before the
+counter existed carries `"counter": 0`, and so does every record from an older build, so column A
+keeps holding the upload time in those cases instead of going blank.
 
 **Settings ▸ Test connection** posts `{"token": "...", "dryRun": true}` instead: the backend checks
 the token and resolves the spreadsheet and `Scans` tab — the part that actually fails in the field —
@@ -91,12 +102,17 @@ then replies `{"status":"ok","count":0,"dryRun":true}` without writing a row.
 A bare JSON array (no envelope) is still accepted from app builds that predate the token, but only
 while `SHARED_SECRET` is `''`.
 
-`doPost` appends one row per element and returns `{"status":"ok","count":N}`, where `N` counts the
-rows actually written — records whose `uploadKey` is already in the sheet are skipped, so `N` can be
-smaller than the batch (0 when the whole batch was already stored). Any other reply (or a non-200)
-makes the app keep the records `PENDING/FAILED` and retry later via WorkManager, so no data is lost
-if the backend is misconfigured.
+`doPost` appends one row per element and returns `{"status":"ok","count":N}`, where `N` is the number
+of rows written. Any other reply (or a non-200) makes the app keep the records `PENDING/FAILED` and
+retry later via WorkManager, so no data is lost if the backend is misconfigured.
 
-`uploadKey` is `<installId>:<local row id>` and is stable across retries of the same record. That is
-what makes a retry safe: the app resends any batch it didn't get a success response for, including
-one whose rows already landed before the response was lost.
+### Duplicate rows
+
+Appends are **not** deduplicated. The app resends any batch it didn't get a success response for —
+including one whose rows already landed before the response was lost, which happens when the dish AP
+drops the connection mid-post or the read times out. Those rows are appended again.
+
+That is the trade for a sheet without a key column: a retry can duplicate a row, whereas not
+retrying would lose field work outright. Check for repeated rows after a sync that reported an error
+and delete them by hand. To get the protection back, store each record's key (the app can send one
+again) and skip keys already seen.

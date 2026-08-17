@@ -27,10 +27,11 @@ sealed interface SyncResult {
  *  - History's "Sync now" — a *direct* call, so a manual tap isn't held back by WorkManager's
  *    network gating (which treats the dish's no-internet WiFi as "no usable network").
  *
- * Every record carries a stable `uploadKey` (see [ScanUploadDto]). A batch whose rows were written
- * but whose response never arrived — a read timeout, or the process dying before the records are
- * marked SENT — is retried, and the backend drops the records it has already seen instead of
- * appending them a second time. Retrying is therefore always safe; never sending is not.
+ * A batch whose rows were written but whose response never arrived — a read timeout, or the process
+ * dying before the records are marked SENT — stays PENDING/FAILED and is retried, which appends
+ * those rows to the sheet a second time. The backend no longer deduplicates (the Upload Key column
+ * was removed), so that is the accepted trade: re-sending can duplicate a row, while not re-sending
+ * would lose field work outright. Duplicates are cleaned up in the sheet.
  */
 class UploadRunner(
     private val dao: ScanDao,
@@ -45,10 +46,9 @@ class UploadRunner(
         val url = settings.sheetsUrl.first().trim()
         if (url.isBlank()) return SyncResult.NoUrl
 
-        val installId = settings.installId()
         val ids = pending.map { it.id }
 
-        return when (val outcome = uploader.postBatch(url, pending.map { it.toUploadDto(installId) })) {
+        return when (val outcome = uploader.postBatch(url, pending.map { it.toUploadDto() })) {
             is UploadOutcome.Success -> {
                 dao.markSent(ids)
                 settings.setLastUploadTime(System.currentTimeMillis())

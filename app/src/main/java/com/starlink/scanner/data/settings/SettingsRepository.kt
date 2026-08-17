@@ -10,9 +10,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.starlink.scanner.BuildConfig
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import java.util.UUID
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
@@ -26,9 +24,9 @@ class SettingsRepository(private val context: Context) {
         val AUTO_UPDATE_CHECK = booleanPreferencesKey("auto_update_check")
         val SKIPPED_VERSION_CODE = longPreferencesKey("skipped_version_code")
         val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
-        val INSTALL_ID = stringPreferencesKey("install_id")
         val AUTO_JOIN_DISH_WIFI = booleanPreferencesKey("auto_join_dish_wifi")
         val DISH_SSID = stringPreferencesKey("dish_ssid")
+        val NEXT_COUNTER = longPreferencesKey("next_counter")
     }
 
     val sheetsUrl: Flow<String> = context.dataStore.data
@@ -55,22 +53,34 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.LAST_UPLOAD_ERROR] = reason }
     }
 
+    // --- Sheet row counter ---
+
     /**
-     * Stable identifier for this install, generated on first use. Paired with a record's local row
-     * id it forms the upload key that lets the backend recognize a re-sent record and refuse to
-     * append it twice (see [com.starlink.scanner.data.upload.UploadRunner]). Row ids alone would
-     * collide across installs, which all write into the same sheet.
+     * The number the next saved record will carry into the sheet's first column. Settable to any
+     * starting value in Settings so a technician can continue a paper log or split a range across
+     * two phones; from there it advances by one per saved record.
      */
-    suspend fun installId(): String {
-        context.dataStore.data.first()[Keys.INSTALL_ID]?.takeIf { it.isNotBlank() }?.let { return it }
-        val generated = UUID.randomUUID().toString()
-        var result = generated
-        // The edit block is atomic, so a concurrent generator either sees our value or we see theirs.
+    val nextCounter: Flow<Long> = context.dataStore.data
+        .map { it[Keys.NEXT_COUNTER] ?: DEFAULT_COUNTER }
+
+    /** Set the number the next saved record will use. */
+    suspend fun setNextCounter(value: Long) {
+        context.dataStore.edit { it[Keys.NEXT_COUNTER] = value }
+    }
+
+    /**
+     * Claim the next counter value and advance the stored one, in a single atomic edit so two saves
+     * racing (a fast double-tap, or the screen restoring mid-save) can never hand out the same
+     * number twice. Consumed at save time only — a record the technician discards from the summary
+     * doesn't burn a number.
+     */
+    suspend fun takeNextCounter(): Long {
+        var claimed = DEFAULT_COUNTER
         context.dataStore.edit { prefs ->
-            val existing = prefs[Keys.INSTALL_ID]
-            if (existing.isNullOrBlank()) prefs[Keys.INSTALL_ID] = generated else result = existing
+            claimed = prefs[Keys.NEXT_COUNTER] ?: DEFAULT_COUNTER
+            prefs[Keys.NEXT_COUNTER] = claimed + 1
         }
-        return result
+        return claimed
     }
 
     // --- Device-wide dish WiFi (network suggestion) ---
@@ -124,5 +134,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setLastUpdateCheck(epochMs: Long) {
         context.dataStore.edit { it[Keys.LAST_UPDATE_CHECK] = epochMs }
+    }
+
+    companion object {
+        /** Where the sheet counter starts before anyone sets it. */
+        const val DEFAULT_COUNTER = 1L
     }
 }

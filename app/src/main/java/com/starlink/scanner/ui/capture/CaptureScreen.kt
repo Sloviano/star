@@ -440,6 +440,7 @@ private fun SummaryContent(s: CaptureUiState.Summary) {
             Column(Modifier.padding(16.dp)) {
                 DishIdField(s.record.dishId)
                 Spacer(Modifier.height(12.dp))
+                LabelValue("Counter", "#${s.record.counter}")
                 LabelValue("Kit number", s.record.kitNumber)
                 LabelValue("Dish serial", s.record.dishSerial)
             }

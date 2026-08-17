@@ -99,7 +99,8 @@ private fun HistoryRow(record: ScanRecord) {
         Column(Modifier.padding(16.dp)) {
             StatusChip(record.status)
             Text(
-                record.kitNumber,
+                // Records saved before the counter existed carry 0 and show the kit number alone.
+                if (record.counter > 0) "#${record.counter}  ${record.kitNumber}" else record.kitNumber,
                 style = MonoValue,
                 fontWeight = FontWeight.Bold,
             )

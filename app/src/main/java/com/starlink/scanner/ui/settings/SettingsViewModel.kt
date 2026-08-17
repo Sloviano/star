@@ -72,7 +72,32 @@ class SettingsViewModel(
     private val _testResult = MutableStateFlow<TestResult?>(null)
     val testResult: StateFlow<TestResult?> = _testResult.asStateFlow()
 
+    /** The number the next saved record will carry into the sheet's first column. */
+    val nextCounter: StateFlow<Long> = settings.nextCounter
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_COUNTER)
+
+    /** Outcome of the last counter edit, rendered under the field. */
+    private val _counterResult = MutableStateFlow<TestResult?>(null)
+    val counterResult: StateFlow<TestResult?> = _counterResult.asStateFlow()
+
     fun setSheetsUrl(url: String) = viewModelScope.launch { settings.setSheetsUrl(url) }
+
+    /**
+     * Set the number the next saved record writes into the sheet's first column. Non-numeric or
+     * negative input is rejected rather than coerced — silently starting from 0 would misnumber
+     * every following row.
+     */
+    fun setNextCounter(raw: String) {
+        val value = raw.trim().toLongOrNull()
+        if (value == null || value < 0) {
+            _counterResult.value = TestResult.Error("Enter a whole number")
+            return
+        }
+        viewModelScope.launch {
+            settings.setNextCounter(value)
+            _counterResult.value = TestResult.Ok("Next record will be #$value")
+        }
+    }
 
     /**
      * Register or withdraw the dish AP suggestion, then persist the toggle.

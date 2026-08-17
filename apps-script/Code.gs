@@ -6,10 +6,12 @@
  * and simply returns { status: "ok", count: 0 } without writing anything. Requests must carry the
  * shared secret; see SHARED_SECRET.
  *
- * Appends are idempotent: each record carries an "uploadKey", stored alongside it, and a record
- * whose key is already in the sheet is skipped. The app retries a batch whenever it doesn't see a
- * success response — including when the rows did land — so without this, a dropped response would
- * duplicate every record in that batch.
+ * Appends are NOT deduplicated. The app retries a batch whenever it doesn't see a success response —
+ * including when the rows did land — so a response lost in transit (the dish AP has no internet;
+ * read timeouts are routine) appends that batch's rows a second time. Watch for repeated rows after
+ * a failed sync and delete them by hand. This was previously handled by an "Upload Key" column,
+ * removed by request; restoring it means storing each record's key again and skipping keys already
+ * seen.
  *
  * Deploy: Extensions ▸ Apps Script ▸ Deploy ▸ New deployment ▸ Web app,
  *   Execute as: Me, Who has access: Anyone. Copy the /exec URL into the app's Settings.
@@ -39,11 +41,10 @@ var SHEET_NAME = 'Scans';
 // token, so treat it as "the URL alone is not enough", not as real authentication.
 var SHARED_SECRET = '';
 
-var HEADER = ['Timestamp', 'Dish ID', 'Kit Number', 'Dish Serial', 'Upload Key'];
-
-// Column holding each record's idempotency key (1-based). Rows whose key is already present are
-// skipped, so a batch the app re-sends after a lost response cannot be appended twice.
-var KEY_COLUMN = 5;
+// The first column is the app's row counter (Settings ▸ Row counter): a number the technician sets
+// to any starting value, advancing by one per saved record. It replaced the upload timestamp, so
+// sheets created before this carry dates in column A and get their header relabelled by getSheet().
+var HEADER = ['Counter', 'Dish ID', 'Kit Number', 'Dish Serial'];
 
 function doPost(e) {
   try {
@@ -91,36 +92,25 @@ function doPost(e) {
 }
 
 /**
- * Map records to rows and append them in one batched write, skipping any record whose upload key is
- * already in the sheet. Returns the number of rows actually written — a batch that is entirely
- * duplicates writes 0 rows and still reports ok, which is what tells the app to stop retrying it.
+ * Map records to rows and append them in one batched write. Returns the number of rows written.
  *
- * Reading the existing keys and appending must not interleave with a second request doing the same,
- * so the whole read-modify-write is taken under the script lock.
+ * Two requests appending at once would each read their own last row and overwrite each other, so the
+ * read-and-append is taken under the script lock.
  */
 function appendRows(items) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
     var sheet = getSheet();
-    var seen = existingKeys(sheet);
-    var rows = [];
-
-    items.forEach(function (d) {
-      var key = d.uploadKey ? String(d.uploadKey) : '';
-      // Records from an app build that predates upload keys are always written — without a key
-      // there is nothing to deduplicate on.
-      if (key) {
-        if (seen[key]) return;
-        seen[key] = true;
-      }
-      rows.push([
-        d.timestamp ? new Date(d.timestamp) : '',
+    var rows = items.map(function (d) {
+      return [
+        // Records saved before the counter existed (and uploads from a pre-counter app build) have
+        // no number; they keep writing the upload timestamp into column A rather than nothing at all.
+        d.counter ? Number(d.counter) : (d.timestamp ? new Date(d.timestamp) : ''),
         d.dishId || '',
         d.kitNumber || '',
-        d.dishSerial || '',
-        key
-      ]);
+        d.dishSerial || ''
+      ];
     });
 
     if (rows.length === 0) return 0;
@@ -130,19 +120,6 @@ function appendRows(items) {
   } finally {
     lock.releaseLock();
   }
-}
-
-/** Set of upload keys already written, read from the key column. */
-function existingKeys(sheet) {
-  var keys = {};
-  var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return keys; // header only (or empty)
-  var values = sheet.getRange(2, KEY_COLUMN, lastRow - 1, 1).getValues();
-  for (var i = 0; i < values.length; i++) {
-    var key = values[i][0];
-    if (key) keys[String(key)] = true;
-  }
-  return keys;
 }
 
 /** Resolve the target spreadsheet (by id, or the bound one) and the Scans tab, creating it if new. */
@@ -157,11 +134,14 @@ function getSheet() {
     sheet.appendRow(HEADER);
     return sheet;
   }
-  // Sheets created before upload keys existed have a 4-column header; label the key column so the
-  // tab is self-describing. Existing rows keep an empty key and are never treated as duplicates.
-  var keyHeader = sheet.getRange(1, KEY_COLUMN).getValue();
-  if (!keyHeader) {
-    sheet.getRange(1, KEY_COLUMN).setValue(HEADER[KEY_COLUMN - 1]);
+  // Nothing is written past column D any more. A sheet that still has the old "Upload Key" column E
+  // keeps it — with blanks in new rows — until you delete the column yourself; the script does not
+  // remove columns from a sheet it did not create.
+  //
+  // Column A used to hold the upload timestamp. Relabel it once so the header matches what new rows
+  // now carry; rows written before the switch keep their dates.
+  if (String(sheet.getRange(1, 1).getValue()) === 'Timestamp') {
+    sheet.getRange(1, 1).setValue(HEADER[0]);
   }
   return sheet;
 }

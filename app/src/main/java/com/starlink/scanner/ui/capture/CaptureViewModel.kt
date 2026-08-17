@@ -314,6 +314,9 @@ class CaptureViewModel(
         if (current !is CaptureUiState.Capturing || !current.canSave) return
         viewModelScope.launch {
             val record = ScanRecord(
+                // Previewed, not claimed: backing out of the summary must not skip a number. The
+                // value actually written is taken at save time (see [onSave]).
+                counter = settings.nextCounter.first(),
                 timestamp = System.currentTimeMillis(),
                 dishId = current.dishId!!,
                 kitNumber = current.checklist.kitNumber!!.trim(),
@@ -331,7 +334,9 @@ class CaptureViewModel(
         val current = _state.value
         if (current !is CaptureUiState.Summary) return
         viewModelScope.launch {
-            scanDao.insert(current.record)
+            // Claim the counter here rather than reusing the one previewed on the summary: only a
+            // record that is actually stored consumes a number, and the claim is atomic.
+            scanDao.insert(current.record.copy(counter = settings.takeNextCounter()))
             ServiceLocator.enqueueUpload()
             onSaved()
             restartCapture()

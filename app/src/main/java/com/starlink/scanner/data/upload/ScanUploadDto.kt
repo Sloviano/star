@@ -10,16 +10,17 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class ScanUploadDto(
+    /** Sequence number written to the sheet's first column; 0 on records saved before it existed. */
+    val counter: Long,
+    /**
+     * Kept on the wire although the sheet's first column now holds [counter]: an installed build
+     * uploading into a not-yet-redeployed Apps Script still fills that column with a timestamp
+     * rather than leaving it blank.
+     */
     val timestamp: Long,
     val dishId: String,
     val kitNumber: String,
     val dishSerial: String,
-    /**
-     * Idempotency key: `<installId>:<row id>`, stable across retries of the same record. The backend
-     * stores it and skips a record whose key it has already written, so a batch re-sent after a lost
-     * response doesn't duplicate rows.
-     */
-    val uploadKey: String,
 )
 
 /**
@@ -39,10 +40,10 @@ data class DryRunDto(
     val dryRun: Boolean = true,
 )
 
-fun ScanRecord.toUploadDto(installId: String): ScanUploadDto = ScanUploadDto(
+fun ScanRecord.toUploadDto(): ScanUploadDto = ScanUploadDto(
+    counter = counter,
     timestamp = timestamp,
     dishId = dishId,
     kitNumber = kitNumber,
     dishSerial = dishSerial,
-    uploadKey = "$installId:$id",
 )
