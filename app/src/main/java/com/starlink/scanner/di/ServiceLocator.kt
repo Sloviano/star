@@ -3,6 +3,7 @@ package com.starlink.scanner.di
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.wifi.WifiManager
+import androidx.core.content.pm.PackageInfoCompat
 import androidx.room.Room
 import com.starlink.scanner.data.local.AppDatabase
 import com.starlink.scanner.data.local.ScanDao
@@ -93,9 +94,17 @@ object ServiceLocator {
         apkInstaller = ApkInstaller(appContext)
     }
 
-    /** Installed build's versionCode — compared against the latest GitHub release (Module 6). */
+    /**
+     * Installed build's versionCode — compared against the latest GitHub release (Module 6).
+     *
+     * Read through [PackageInfoCompat], not `PackageInfo.longVersionCode`: that field is API 28 while
+     * this app ships to minSdk 26, so on an API 26/27 device it throws `NoSuchMethodError` — and it
+     * would do so during the launch-time update check, taking down the whole app shell.
+     */
     fun currentVersionCode(): Long =
-        appContext.packageManager.getPackageInfo(appContext.packageName, 0).longVersionCode
+        PackageInfoCompat.getLongVersionCode(
+            appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+        )
 
     /** Installed build's versionName — shown in Settings diagnostics. */
     fun currentVersionName(): String =
