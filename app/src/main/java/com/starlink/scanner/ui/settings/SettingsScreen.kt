@@ -44,6 +44,9 @@ fun SettingsScreen(
     val lastError by viewModel.lastUploadError.collectAsStateWithLifecycle()
     val autoUpdateCheck by viewModel.autoUpdateCheck.collectAsStateWithLifecycle()
     val lastUpdateCheck by viewModel.lastUpdateCheck.collectAsStateWithLifecycle()
+    val autoJoinDishWifi by viewModel.autoJoinDishWifi.collectAsStateWithLifecycle()
+    val autoJoinResult by viewModel.autoJoinResult.collectAsStateWithLifecycle()
+    val dishSsid by viewModel.dishSsid.collectAsStateWithLifecycle()
 
     var url by remember { mutableStateOf(savedUrl) }
 
@@ -75,6 +78,35 @@ fun SettingsScreen(
         ) { Text(if (testResult is TestResult.Testing) "Testing…" else "Test connection") }
 
         TestResultLine(testResult)
+
+        if (viewModel.canSuggestWifi) {
+            Spacer(Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
+            Text("Dish WiFi", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.foundation.layout.Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text("Auto-join dish WiFi", style = MaterialTheme.typography.bodyMedium)
+                Switch(
+                    checked = autoJoinDishWifi,
+                    onCheckedChange = { viewModel.setAutoJoinDishWifi(it) },
+                )
+            }
+            Text(
+                "Lets Android join the dish access point for the whole phone, so other apps can " +
+                    "reach the dish too. Tapping Dish ID on the Capture screen connects this app " +
+                    "only. Android asks you to approve the suggestion the first time it matches.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            DiagnosticRow("Network to join", dishSsid)
+            TestResultLine(autoJoinResult)
+        }
 
         Spacer(Modifier.height(24.dp))
         HorizontalDivider()

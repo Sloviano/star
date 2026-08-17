@@ -4,6 +4,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiInfo
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.os.PatternMatcher
@@ -68,7 +69,50 @@ class StarlinkWifiConnector(private val cm: ConnectivityManager) {
         }.conflate()
     }
 
+    /**
+     * The SSID the dish AP actually answered on, read back from a [connectFlow] network — or null if
+     * it can't be determined.
+     *
+     * Worth the trouble because [StarlinkWifiSuggester] can only target an **exact** SSID, while this
+     * class matches a prefix: the only way to suggest the technician's real AP ("STARLINK-1234") and
+     * not just the bare default is to observe what we connected to and remember it.
+     *
+     * Reading an SSID normally costs `ACCESS_FINE_LOCATION`, which this app deliberately never asks
+     * for — and the redacted value comes back as `<unknown ssid>`, which [normalizeSsid] rejects.
+     * The exception is a network *this app itself* brought up with a [WifiNetworkSpecifier]: the
+     * platform hands the requesting app the unredacted [WifiInfo], since it already knows what it
+     * asked for. So pass only networks from [connectFlow] here; a passively-observed WiFi network
+     * (the technician joining from system settings) will simply return null.
+     */
+    fun ssidOf(network: Network): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val caps = cm.getNetworkCapabilities(network) ?: return null
+        val info = caps.transportInfo as? WifiInfo ?: return null
+        return normalizeSsid(info.ssid)
+    }
+
     companion object {
-        private const val SSID_PREFIX = "STARLINK"
+        /**
+         * Default SSID prefix of the dish AP. Also the exact SSID of a stock unit, which is why
+         * [StarlinkWifiSuggester] can fall back to it before anything has been learned.
+         */
+        const val SSID_PREFIX = "STARLINK"
+
+        /**
+         * What [WifiInfo.getSSID] returns instead of a name when the platform redacts it. Spelled out
+         * rather than referencing `WifiManager.UNKNOWN_SSID`, which is API 30 — above this class's
+         * API 29 floor.
+         */
+        private const val UNKNOWN_SSID = "<unknown ssid>"
+
+        /**
+         * Clean up a raw [WifiInfo.getSSID] value: it arrives wrapped in quotes (`"STARLINK"`), and
+         * is the literal `<unknown ssid>` when the platform redacts it for want of location
+         * permission. Returns null for anything unusable so callers never suggest a junk SSID.
+         */
+        fun normalizeSsid(raw: String?): String? {
+            val trimmed = raw?.trim()?.removeSurrounding("\"")?.trim().orEmpty()
+            return trimmed.takeIf { it.isNotEmpty() && it != UNKNOWN_SSID }
+        }
     }
 }

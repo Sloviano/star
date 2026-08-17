@@ -10,6 +10,7 @@ import com.starlink.scanner.data.local.ScanRecord
 import com.starlink.scanner.data.network.DishNetworkSource
 import com.starlink.scanner.data.network.DishReachability
 import com.starlink.scanner.data.network.StarlinkWifiConnector
+import com.starlink.scanner.data.settings.SettingsRepository
 import com.starlink.scanner.data.starlink.StarlinkRepository
 import com.starlink.scanner.di.ServiceLocator
 import com.starlink.scanner.domain.BarcodeFormat
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.coroutines.coroutineContext
@@ -41,6 +43,7 @@ class CaptureViewModel(
     private val reachability: DishReachability,
     private val wifiConnector: StarlinkWifiConnector,
     private val scanDao: ScanDao,
+    private val settings: SettingsRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<CaptureUiState>(CaptureUiState.Capturing())
@@ -94,8 +97,20 @@ class CaptureViewModel(
         if (!wifiConnector.isSupported) return
         connectJob?.cancel()
         connectJob = viewModelScope.launch {
-            wifiConnector.connectFlow().collect { connectedNetwork = it }
+            wifiConnector.connectFlow().collect { network ->
+                connectedNetwork = network
+                // Remember which "STARLINK…" AP we actually landed on. This connection is app-scoped,
+                // so it's also the one moment the SSID is readable without location permission — and
+                // Settings ▸ Auto-join needs the exact name to suggest it device-wide later.
+                if (network != null) rememberSsid(network)
+            }
         }
+    }
+
+    /** Persist the connected AP's SSID, if it can be read and it's new. */
+    private suspend fun rememberSsid(network: Network) {
+        val ssid = wifiConnector.ssidOf(network) ?: return
+        if (ssid != settings.dishSsid.first()) settings.setDishSsid(ssid)
     }
 
     /** Reset to a fresh capture and (re)start the background dish-ID connection loop. */
@@ -338,6 +353,7 @@ class CaptureViewModel(
                     reachability = ServiceLocator.dishReachability,
                     wifiConnector = ServiceLocator.starlinkWifiConnector,
                     scanDao = ServiceLocator.scanDao,
+                    settings = ServiceLocator.settingsRepository,
                 ) as T
             }
         }

@@ -64,6 +64,34 @@ and `grpckt` (Kotlin coroutine stub) generators — see `app/build.gradle.kts`. 
 under `app/build/generated/` and is produced automatically by any build; there is no checked-in
 generated source to maintain.
 
+## Joining the dish WiFi (Module 2)
+
+Two different mechanisms, because Android offers no single API that is both instant and shared:
+
+| | `StarlinkWifiConnector` | `StarlinkWifiSuggester` |
+|---|---|---|
+| API | `WifiNetworkSpecifier` + `requestNetwork` | `WifiNetworkSuggestion` |
+| Scope | **This app only** — other apps cannot see or use the network | **Device-wide** — an ordinary connection every app shares |
+| Triggered by | Tapping the Dish ID signalizer on Capture | Settings ▸ Dish WiFi ▸ Auto-join |
+| Timing | Immediate, with a system approval dialog | Whenever the platform decides the AP is worth joining |
+| SSID | Prefix match, so `STARLINK-1234` qualifies | **Exact match only** — `WifiNetworkSuggestion.Builder` has no `setSsidPattern` at any API level |
+| Lifetime | Only while the capture screen collects the flow | Persists across reboots until withdrawn or the app is uninstalled |
+
+The exact-SSID limitation is why the app remembers which AP it connected to:
+`StarlinkWifiConnector.ssidOf()` reads the SSID back from a network *this app itself* brought up —
+the one case the platform returns it unredacted without `ACCESS_FINE_LOCATION`, which this app still
+never requests. That value is persisted as `dish_ssid` and suggested alongside the stock `STARLINK`.
+A technician who has never used the in-app connect therefore gets the default suggested; one who has
+gets their real AP.
+
+Registering a suggestion returns success as soon as Android *accepts* it — not when the phone
+connects. The first time the AP is actually matched, Android shows the user a notification asking
+whether to allow this app's suggestions; declining turns later calls into
+`STATUS_NETWORK_SUGGESTIONS_ERROR_APP_DISALLOWED`, which the Settings toggle surfaces with recovery
+instructions.
+
+Needs `CHANGE_WIFI_STATE` + `ACCESS_WIFI_STATE` (both install-time, neither is location).
+
 ## Testing against a real dish
 
 With the phone (or laptop) on the dish WiFi:

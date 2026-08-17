@@ -2,6 +2,7 @@ package com.starlink.scanner.di
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.wifi.WifiManager
 import androidx.room.Room
 import com.starlink.scanner.data.local.AppDatabase
 import com.starlink.scanner.data.local.ScanDao
@@ -9,6 +10,7 @@ import com.starlink.scanner.data.network.DishNetworkMonitor
 import com.starlink.scanner.data.network.DishNetworkSource
 import com.starlink.scanner.data.network.DishReachability
 import com.starlink.scanner.data.network.StarlinkWifiConnector
+import com.starlink.scanner.data.network.StarlinkWifiSuggester
 import com.starlink.scanner.data.network.TcpDishReachability
 import com.starlink.scanner.data.settings.SettingsRepository
 import com.starlink.scanner.data.starlink.RealStarlinkRepository
@@ -38,8 +40,14 @@ object ServiceLocator {
     lateinit var dishNetworkSource: DishNetworkSource
         private set
 
-    // App-initiated one-tap connect to the dish's open "STARLINK…" AP (API 29+).
+    // App-initiated one-tap connect to the dish's open "STARLINK…" AP (API 29+). App-scoped: the
+    // resulting network is usable by this app only.
     lateinit var starlinkWifiConnector: StarlinkWifiConnector
+        private set
+
+    // Device-wide alternative to the above (API 29+): suggests the dish AP to the platform so every
+    // app on the phone can reach the dish. Driven by the Settings ▸ Auto-join toggle.
+    lateinit var starlinkWifiSuggester: StarlinkWifiSuggester
         private set
 
     // Dish-LAN reachability probe (Module 2): bound TCP connect to 192.168.100.1:9200.
@@ -77,6 +85,10 @@ object ServiceLocator {
         val cm = appContext.getSystemService(ConnectivityManager::class.java)
         dishNetworkSource = DishNetworkMonitor(cm)
         starlinkWifiConnector = StarlinkWifiConnector(cm)
+        // Nullable: WifiManager is absent on hardware without WiFi, which the suggester treats as
+        // Unsupported rather than crashing at startup.
+        starlinkWifiSuggester =
+            StarlinkWifiSuggester(appContext.getSystemService(WifiManager::class.java))
 
         apkInstaller = ApkInstaller(appContext)
     }

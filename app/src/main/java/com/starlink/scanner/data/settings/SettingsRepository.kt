@@ -27,6 +27,8 @@ class SettingsRepository(private val context: Context) {
         val SKIPPED_VERSION_CODE = longPreferencesKey("skipped_version_code")
         val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
         val INSTALL_ID = stringPreferencesKey("install_id")
+        val AUTO_JOIN_DISH_WIFI = booleanPreferencesKey("auto_join_dish_wifi")
+        val DISH_SSID = stringPreferencesKey("dish_ssid")
     }
 
     val sheetsUrl: Flow<String> = context.dataStore.data
@@ -69,6 +71,33 @@ class SettingsRepository(private val context: Context) {
             if (existing.isNullOrBlank()) prefs[Keys.INSTALL_ID] = generated else result = existing
         }
         return result
+    }
+
+    // --- Device-wide dish WiFi (network suggestion) ---
+
+    /**
+     * Whether the dish AP is registered as a network suggestion, so the whole phone joins it and
+     * other apps can reach the dish. Off by default: registering one makes Android show the user an
+     * approval notification, which shouldn't happen to a technician who never asked for it.
+     */
+    val autoJoinDishWifi: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.AUTO_JOIN_DISH_WIFI] ?: false }
+
+    /**
+     * The dish AP's real SSID, learned from an app-initiated connection (see
+     * [com.starlink.scanner.data.network.StarlinkWifiConnector.ssidOf]), or blank until one happens.
+     * Remembered because a suggestion must name the SSID exactly and dish APs aren't all called
+     * plain "STARLINK".
+     */
+    val dishSsid: Flow<String> = context.dataStore.data
+        .map { it[Keys.DISH_SSID] ?: "" }
+
+    suspend fun setAutoJoinDishWifi(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.AUTO_JOIN_DISH_WIFI] = enabled }
+    }
+
+    suspend fun setDishSsid(ssid: String) {
+        context.dataStore.edit { it[Keys.DISH_SSID] = ssid }
     }
 
     // --- In-app updater (Module 6) ---

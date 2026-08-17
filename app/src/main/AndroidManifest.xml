@@ -7,6 +7,14 @@
     <!-- Inspect/request the dish WiFi network for socket binding. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <!--
+       Register the dish AP as a network suggestion so the phone joins it device-wide (Settings ▸
+       Auto-join). Install-time permission — no runtime prompt, and notably NOT location: suggestions
+       don't require it, so the app still never asks for location.
+    -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- Read back this app's own registered suggestions so they can be replaced/withdrawn cleanly. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Barcode scanning (requested at first scan, not up front). -->
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- In-app updater: install a newer APK downloaded from GitHub Releases. -->
