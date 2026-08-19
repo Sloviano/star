@@ -72,14 +72,32 @@ can extract it. Treat it as "the URL alone is not enough".
 4. Confirm with **Settings ▸ Test connection** — the dry run is authenticated, so a mismatched
    token reports `Unauthorized` here rather than silently failing later.
 
-To verify the secret is actually live, post to `/exec` without one; it must be refused:
+To verify the secret is actually live, post to `/exec` without one; it must be refused.
+
+`/exec` answers a POST with a 302 to `script.googleusercontent.com`, and the real body is only on
+the **GET** that follows. The app gets this right (OkHttp switches to GET on a 302, which is why
+`SheetsUploader` enables `followRedirects`), but `curl -L` re-POSTs and comes back with a 405 and an
+HTML "page not found" — which looks like a broken deployment and isn't. So follow the redirect by
+hand:
 
 ```bash
-curl -sL -X POST -H 'Content-Type: application/json' \
-  -d '{"dryRun":true}' '<your /exec URL>'
-# secret on:  {"status":"error","message":"Unauthorized"}
-# secret off: {"status":"ok","count":0,"dryRun":true}   ← endpoint is open
+URL='<your /exec URL>'
+probe() {
+  LOC=$(curl -s -o /dev/null -D - -X POST -H 'Content-Type: application/json' \
+          -d "$1" "$URL" | grep -i '^location:' | tr -d '\r' | awk '{print $2}')
+  curl -s "$LOC"; echo
+}
+
+probe '{"dryRun":true}'                  # no token
+probe '{"token":"WRONG","dryRun":true}'  # wrong token
+probe '{"token":"<your SHEETS_TOKEN>","dryRun":true}'
 ```
+
+The first two must answer `{"status":"error","message":"Unauthorized"}` and the third
+`{"status":"ok","count":0,"dryRun":true}`. Anything else means the secret is not live, or does not
+match the token in the builds already in the field — check all three, because a refusal on the first
+two proves only that *some* secret is set, not that it is the one your phones send. `dryRun` writes
+no row, so this is safe to repeat.
 
 Order matters. Setting `SHARED_SECRET` before the token-carrying build is installed makes the
 backend reject uploads from every phone still on the old build. Nothing is lost — those records stay
