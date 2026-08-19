@@ -77,9 +77,31 @@ To migrate to a proper release key later, set `RELEASE_KEYSTORE`, `RELEASE_KEYST
 `RELEASE_KEY_ALIAS` and `RELEASE_KEY_PASSWORD` in `local.properties` — and plan the fleet reinstall,
 after every phone has synced.
 
-R8 keep rules for the reflective libraries (protobuf-lite, gRPC, kotlinx.serialization) live in
-[`app/src/main/keepRules/rules.keep`](app/src/main/keepRules/rules.keep). Minification failures show
-up only at runtime, so smoke-test a release build against a real dish before publishing it.
+### Before you publish
+
+**Install the release APK on a real phone and open it.** Not the debug build, and not a build you
+only inspected — the minified one you are about to upload. R8 breakage is invisible until the app
+runs: v1.8 shipped with ML Kit's registrar constructors stripped and crashed on the first frame of
+the capture screen, having passed every check that did not involve launching it. A broken build also
+cannot deliver its own fix, because it dies before the update check runs, so every phone that took
+it needs a manual sideload.
+
+```bash
+./gradlew :app:assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.apk
+adb shell am start -n com.starlink.scanner/.MainActivity
+adb logcat -d -b crash | grep -c 'FATAL EXCEPTION'                 # must be 0
+adb logcat -d | grep -c 'Could not instantiate com.google.mlkit'   # must be 0
+```
+
+Then open the capture screen in **both** Barcode and Text mode — each constructs a different ML Kit
+client, and only the one you exercise is actually proven. `PipelineManager: OCR process succeeded`
+in the log means text mode is really running. Scan against a real dish and kit box when you can.
+
+R8 keep rules for the reflective libraries (ML Kit, protobuf-lite, gRPC, kotlinx.serialization) live
+in [`app/src/main/keepRules/rules.keep`](app/src/main/keepRules/rules.keep). Note that
+`android.enableR8.fullMode` is turned **off** in `gradle.properties`, deliberately — see the comment
+there before turning it back on.
 
 ## Capturing the kit number (Module 3)
 
