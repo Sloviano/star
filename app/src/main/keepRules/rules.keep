@@ -49,6 +49,18 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
+# --- ML Kit component discovery ---
+# MlKitInitProvider reads the registrar class names out of the merged manifest and instantiates each
+# by reflection, so both the names and their no-arg constructors must survive. Keeping the class
+# alone is not enough: R8 full mode drops the constructor and every ML Kit feature then fails with an
+# NPE deep inside getClient(), long after the real cause. Kept explicitly so this holds even if
+# android.enableR8.fullMode is turned back on.
+-keep class * implements com.google.firebase.components.ComponentRegistrar {
+    <init>();
+}
+-keep class com.google.mlkit.common.internal.MlKitInitProvider { <init>(); }
+-keep class com.google.mlkit.common.internal.MlKitComponentDiscoveryService { <init>(); }
+
 # --- App entry points constructed reflectively by the platform ---
 # WorkManager instantiates workers by class name.
 -keep class com.starlink.scanner.data.upload.UploadWorker { <init>(...); }
