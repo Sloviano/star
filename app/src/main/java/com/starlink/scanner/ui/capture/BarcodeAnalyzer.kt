@@ -2,7 +2,6 @@ package com.starlink.scanner.ui.capture
 
 import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
-import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -18,7 +17,9 @@ import com.starlink.scanner.domain.BarcodeFormat
  *
  * Formats are restricted to the ones the kit box uses (Code 128 / QR / Data Matrix) for speed.
  */
-class BarcodeAnalyzer(private val onBarcode: (String, BarcodeFormat) -> Unit) : ImageAnalysis.Analyzer {
+class BarcodeAnalyzer(
+    private val onBarcode: (String, BarcodeFormat) -> Unit,
+) : FrameAnalyzer {
 
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
@@ -47,6 +48,9 @@ class BarcodeAnalyzer(private val onBarcode: (String, BarcodeFormat) -> Unit) : 
             // Always close the frame so the pipeline can deliver the next one.
             .addOnCompleteListener { imageProxy.close() }
     }
+
+    /** Release the ML Kit model. The controller drops this analyzer whenever the mode changes. */
+    override fun close() = scanner.close()
 }
 
 /** Map an ML Kit [Barcode] format constant to the domain [BarcodeFormat]. */

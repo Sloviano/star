@@ -26,16 +26,16 @@ import kotlinx.coroutines.flow.emptyFlow
  * Requires API 29+ (the specifier API). On older devices this is a no-op empty flow and the
  * technician connects to the dish WiFi manually, as before.
  */
-class StarlinkWifiConnector(private val cm: ConnectivityManager) {
+class StarlinkWifiConnector(private val cm: ConnectivityManager) : DishWifiConnector {
 
     /** True on devices where app-initiated connect is available (API 29+). */
-    val isSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+    override val isSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
 
     /**
      * Start a connect request and emit the bound [Network] on success (null while not connected).
      * Collecting this triggers the system dialog; cancelling collection cancels the request.
      */
-    fun connectFlow(): Flow<Network?> {
+    override fun connectFlow(): Flow<Network?> {
         if (!isSupported) return emptyFlow()
         return callbackFlow {
             val specifier = WifiNetworkSpecifier.Builder()
@@ -84,7 +84,7 @@ class StarlinkWifiConnector(private val cm: ConnectivityManager) {
      * asked for. So pass only networks from [connectFlow] here; a passively-observed WiFi network
      * (the technician joining from system settings) will simply return null.
      */
-    fun ssidOf(network: Network): String? {
+    override fun ssidOf(network: Network): String? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
         val caps = cm.getNetworkCapabilities(network) ?: return null
         val info = caps.transportInfo as? WifiInfo ?: return null

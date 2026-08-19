@@ -111,8 +111,16 @@ private fun HistoryRow(record: ScanRecord) {
                 maxLines = 1,
             )
             Text(
+                // Uploads go out as one batch, and a failure marks every record in it — so this
+                // counts the failed syncs this record was carried in, not tries at this record
+                // alone. Labelled accordingly rather than as "attempts", which read as though a
+                // single stubborn record were being retried on its own.
                 relativeTime(record.timestamp) +
-                    if (record.status == UploadStatus.FAILED) "  ·  ${record.attempts} attempts" else "",
+                    if (record.status == UploadStatus.FAILED) {
+                        "  ·  ${record.attempts} failed ${if (record.attempts == 1) "sync" else "syncs"}"
+                    } else {
+                        ""
+                    },
                 style = MaterialTheme.typography.bodySmall,
             )
         }

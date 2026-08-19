@@ -39,6 +39,9 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -60,9 +63,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.starlink.scanner.domain.BarcodeFormat
+import com.starlink.scanner.domain.ScanMode
 import com.starlink.scanner.domain.ScanTarget
 import com.starlink.scanner.ui.theme.LocalAppColors
 import com.starlink.scanner.ui.theme.MonoValue
@@ -82,6 +87,13 @@ fun CaptureScreen(
     val capturing = state is CaptureUiState.Capturing
     LaunchedEffect(capturing) { if (!capturing) torchEnabled = false }
 
+    // Poll for the dish only while the screen is actually showing, matching the CameraX preview,
+    // which unbinds on stop. viewModelScope would otherwise keep the loop running in the background.
+    LifecycleStartEffect(viewModel) {
+        viewModel.onScreenStarted()
+        onStopOrDispose { viewModel.onScreenStopped() }
+    }
+
     // Beep + vibrate once per accepted new signalizer fill (scan or dish-ID connect).
     val haptics = LocalHapticFeedback.current
     val tone = remember { runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 80) }.getOrNull() }
@@ -100,6 +112,8 @@ fun CaptureScreen(
                 is CaptureUiState.Capturing -> CapturingContent(
                     s = s,
                     onScan = viewModel::onScan,
+                    onScanText = viewModel::onScanText,
+                    onSetScanMode = viewModel::onSetScanMode,
                     onConfirmScan = viewModel::onConfirmScan,
                     onRejectScan = viewModel::onRejectScan,
                     onSelectTarget = viewModel::onSelectTarget,
@@ -149,6 +163,8 @@ fun CaptureScreen(
 private fun CapturingContent(
     s: CaptureUiState.Capturing,
     onScan: (String, BarcodeFormat) -> Unit,
+    onScanText: (String) -> Unit,
+    onSetScanMode: (ScanMode) -> Unit,
     onConfirmScan: () -> Unit,
     onRejectScan: () -> Unit,
     onSelectTarget: (ScanTarget) -> Unit,
@@ -188,7 +204,11 @@ private fun CapturingContent(
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     CameraScanner(
+                        // Text mode reads the printed kit number; it applies to the kit field only,
+                        // so the dish serial always falls back to barcode scanning.
+                        mode = if (s.target == ScanTarget.KIT) s.scanMode else ScanMode.BARCODE,
                         onBarcode = onScan,
+                        onText = onScanText,
                         torchEnabled = torchEnabled,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -198,11 +218,16 @@ private fun CapturingContent(
                 Spacer(Modifier.height(180.dp))
             }
 
-            // Center reticle to aim the barcode — centered over the full camera region.
+            // Center reticle — centered over the full camera region. Text mode frames a line of
+            // print rather than a square symbol, so the box turns wide and shallow to match.
+            val readingText = s.target == ScanTarget.KIT && s.scanMode == ScanMode.TEXT
             Box(
                 Modifier
                     .align(Alignment.Center)
-                    .size(width = 200.dp, height = 150.dp)
+                    .size(
+                        width = if (readingText) 300.dp else 200.dp,
+                        height = if (readingText) 90.dp else 150.dp,
+                    )
                     .border(3.dp, Color.White.copy(alpha = 0.9f), RoundedCornerShape(12.dp))
             )
 
@@ -216,6 +241,19 @@ private fun CapturingContent(
                     contentDescription = if (torchEnabled) "Turn torch off" else "Turn torch on",
                 )
             }
+        }
+
+        // Capture mode for the kit number. Only shown while the kit is the active field: text mode
+        // doesn't apply to the dish serial, and a control that silently stops mattering is worse
+        // than one that goes away.
+        if (s.target == ScanTarget.KIT) {
+            ScanModePicker(
+                mode = s.scanMode,
+                onSelect = onSetScanMode,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 8.dp),
+            )
         }
 
         // The three signalizers below the camera — kit, dish serial, dish ID. They wrap to content
@@ -260,7 +298,12 @@ private fun CapturingContent(
 
     // Confirm a just-scanned code before it fills the field, so a mis-aimed scan can be rejected.
     s.pendingScan?.let { pending ->
-        ScanConfirmDialog(pending = pending, onAccept = onConfirmScan, onReject = onRejectScan)
+        ScanConfirmDialog(
+            pending = pending,
+            mode = if (pending.target == ScanTarget.KIT) s.scanMode else ScanMode.BARCODE,
+            onAccept = onConfirmScan,
+            onReject = onRejectScan,
+        )
     }
 }
 
@@ -271,6 +314,7 @@ private fun CapturingContent(
 @Composable
 private fun ScanConfirmDialog(
     pending: CaptureUiState.PendingScan,
+    mode: ScanMode,
     onAccept: () -> Unit,
     onReject: () -> Unit,
 ) {
@@ -278,12 +322,16 @@ private fun ScanConfirmDialog(
         ScanTarget.KIT -> "kit number"
         ScanTarget.DISH -> "dish serial"
     }
+    val fromText = mode == ScanMode.TEXT
     AlertDialog(
         onDismissRequest = onReject,
         title = { Text("Confirm $fieldName") },
         text = {
             Column {
-                Text("Scanned value:", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    if (fromText) "Read from the label:" else "Scanned value:",
+                    style = MaterialTheme.typography.labelLarge,
+                )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     pending.value,
@@ -291,7 +339,13 @@ private fun ScanConfirmDialog(
                 )
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Is this the right code? Tap No to re-scan if it grabbed the wrong label.",
+                    // Text mode can misread a character rather than grab the wrong label, so it asks
+                    // the technician to check the value itself, not which label it came from.
+                    if (fromText) {
+                        "Check every character against the box — tap No to read it again."
+                    } else {
+                        "Is this the right code? Tap No to re-scan if it grabbed the wrong label."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -299,6 +353,35 @@ private fun ScanConfirmDialog(
         confirmButton = { Button(onClick = onAccept) { Text("Accept") } },
         dismissButton = { OutlinedButton(onClick = onReject) { Text("No") } },
     )
+}
+
+/**
+ * Barcode / Text choice for the kit number. Barcode is the reliable default; Text reads the printed
+ * number and exists for a Data Matrix label that is damaged, smudged or wrapped around a corner —
+ * without it, such a kit cannot be saved at all.
+ */
+@Composable
+private fun ScanModePicker(
+    mode: ScanMode,
+    onSelect: (ScanMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    SingleChoiceSegmentedButtonRow(modifier = modifier) {
+        ScanMode.entries.forEachIndexed { index, entry ->
+            SegmentedButton(
+                selected = mode == entry,
+                onClick = { onSelect(entry) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = ScanMode.entries.size),
+            ) {
+                Text(
+                    when (entry) {
+                        ScanMode.BARCODE -> "Barcode"
+                        ScanMode.TEXT -> "Text"
+                    }
+                )
+            }
+        }
+    }
 }
 
 /** Human-readable state for the dish-ID signalizer while it's still connecting. */

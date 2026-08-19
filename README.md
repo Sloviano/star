@@ -22,7 +22,7 @@ MVVM + unidirectional state. `ViewModel`s expose `StateFlow<UiState>`; Compose c
 |--------|-------|
 | 1 — gRPC dish client | `data/starlink/`, `src/main/proto/device_min.proto` |
 | 2 — WiFi detection & network binding | `data/network/` |
-| 3 — Barcode scanning | `ui/capture/` (CameraX + ML Kit) |
+| 3 — Kit/dish capture | `ui/capture/` (CameraX + ML Kit barcode **or** text) |
 | 4 — Local persistence | `data/local/` (Room) |
 | 5 — Deferred upload to Sheets | `data/upload/` (WorkManager + OkHttp + kotlinx.serialization) |
 
@@ -32,9 +32,77 @@ MVVM + unidirectional state. `ViewModel`s expose `StateFlow<UiState>`; Compose c
 ./gradlew :app:assembleDebug        # build
 ./gradlew :app:installDebug         # install on a connected device/emulator
 ./gradlew test                      # JVM unit tests
+./gradlew :app:assembleRelease      # the APK you publish (see Releasing)
 ```
 
 Requires JDK 17. minSdk 26.
+
+## Releasing (Module 6)
+
+**Publish `app/build/outputs/apk/release/app-release.apk`.** Releases up to v1.7 shipped
+`app-debug.apk` instead, which is `android:debuggable` — on a technician's phone that hands anyone
+with USB access the captured records, the Apps Script URL and the shared secret straight out of app
+storage via `run-as`. The release variant closes that, and R8 plus an ABI filter keep it far smaller
+than the debug APK it replaces, which matters over field connectivity.
+
+ML Kit's barcode and OCR models are **native**, at roughly 16 MB per ABI, so they dominate the APK.
+The release variant therefore ships `armeabi-v7a` and `arm64-v8a` only: carrying x86/x86_64 as well
+added ~33 MB that no technician's phone can execute, since those exist for emulators. Debug builds
+stay universal so the emulator still works. Dropping `armeabi-v7a` too would save a further ~10 MB,
+at the cost of any 32-bit-only device in the fleet.
+
+The tag must encode the versionCode as `v<versionName>+<versionCode>` (e.g. `v1.8+9`) — that is
+what `UpdateChecker.parseVersionCode` reads — and the release needs exactly one `.apk` asset.
+
+### The signing key
+
+The in-app updater installs over the existing app, and **Android only allows that when the new APK
+carries the same signature**. Every published build so far was signed with this machine's Android
+debug keystore, so that certificate is what the whole installed fleet trusts, and
+`app/build.gradle.kts` keeps signing releases with it on purpose. A different key means every phone
+needs a manual uninstall and reinstall — which discards any records that haven't uploaded yet.
+
+> **Back up `~/.android/debug.keystore`.** It is machine-local, it is in no backup by default, and
+> Android Studio silently regenerates it *with a different key* if the file goes missing. Losing it
+> costs a manual reinstall on every phone in the field.
+
+Verify before publishing — the certificate digest must match what is already installed:
+
+```bash
+apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk
+aapt2 dump badging app/build/outputs/apk/release/app-release.apk | grep debuggable   # must be empty
+```
+
+To migrate to a proper release key later, set `RELEASE_KEYSTORE`, `RELEASE_KEYSTORE_PASSWORD`,
+`RELEASE_KEY_ALIAS` and `RELEASE_KEY_PASSWORD` in `local.properties` — and plan the fleet reinstall,
+after every phone has synced.
+
+R8 keep rules for the reflective libraries (protobuf-lite, gRPC, kotlinx.serialization) live in
+[`app/src/main/keepRules/rules.keep`](app/src/main/keepRules/rules.keep). Minification failures show
+up only at runtime, so smoke-test a release build against a real dish before publishing it.
+
+## Capturing the kit number (Module 3)
+
+The kit box carries its number twice — as a Data Matrix label and as printed text — and the capture
+screen offers both, chosen with a Barcode | Text toggle. Barcode is the default and the reliable
+path; text (OCR) exists for a label that is damaged, smudged or wrapped around a corner, which would
+otherwise leave the kit unsaveable: unlike the dish serial, the kit field has no manual-entry
+fallback.
+
+The choice applies to the **kit field only** — the dish serial is always read from its Data Matrix
+label — so the toggle is hidden once the target advances. It persists across kits (a pallet of bad
+labels shouldn't mean re-picking text mode on every box) and is one tap to change.
+
+OCR returns every word on the box, so [`domain/KitNumber.kt`](app/src/main/java/com/starlink/scanner/domain/KitNumber.kt)
+decides which one is the kit number. Known kit numbers are `KIT4M0` plus ten more
+uppercase-alphanumeric characters (`KIT4M06183988NHK`), and matching is two-tier: that exact shape
+first, then any plausible `KIT…` token. The second tier matters — `KIT4M0` is almost certainly a
+batch code, and keying only on it would make a future kit generation silently unrecognisable, with
+nothing on screen to explain why. Every candidate still goes through the technician's Accept/No
+confirmation, and must hold still for two consecutive frames first, because OCR output flickers.
+
+`KitNumber` is a pure function with no ML Kit or Android types precisely so it can be tested against
+real values; `TextAnalyzer` stays a dumb pipe and does no filtering of its own.
 
 ## Database migrations (Module 4)
 

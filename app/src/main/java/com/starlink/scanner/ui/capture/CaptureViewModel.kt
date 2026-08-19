@@ -9,11 +9,14 @@ import com.starlink.scanner.data.local.ScanDao
 import com.starlink.scanner.data.local.ScanRecord
 import com.starlink.scanner.data.network.DishNetworkSource
 import com.starlink.scanner.data.network.DishReachability
-import com.starlink.scanner.data.network.StarlinkWifiConnector
-import com.starlink.scanner.data.settings.SettingsRepository
+import com.starlink.scanner.data.network.DishWifiConnector
+import com.starlink.scanner.data.settings.CaptureSettings
 import com.starlink.scanner.data.starlink.StarlinkRepository
 import com.starlink.scanner.di.ServiceLocator
 import com.starlink.scanner.domain.BarcodeFormat
+import com.starlink.scanner.domain.DishInfo
+import com.starlink.scanner.domain.KitNumber
+import com.starlink.scanner.domain.ScanMode
 import com.starlink.scanner.domain.ScanTarget
 import com.starlink.scanner.domain.UploadStatus
 import com.starlink.scanner.ui.DishConnection
@@ -41,9 +44,15 @@ class CaptureViewModel(
     private val starlink: StarlinkRepository,
     private val dishNetwork: DishNetworkSource,
     private val reachability: DishReachability,
-    private val wifiConnector: StarlinkWifiConnector,
+    private val wifiConnector: DishWifiConnector,
     private val scanDao: ScanDao,
-    private val settings: SettingsRepository,
+    private val settings: CaptureSettings,
+    /**
+     * Kick the deferred upload job after a save. Injected rather than reaching for
+     * [ServiceLocator] inline, because WorkManager needs a real [android.content.Context] and that
+     * put the whole save path out of reach of a JVM test.
+     */
+    private val enqueueUpload: () -> Unit = { ServiceLocator.enqueueUpload() },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<CaptureUiState>(CaptureUiState.Capturing())
@@ -75,6 +84,22 @@ class CaptureViewModel(
      */
     private var lastRejected: String? = null
 
+    /**
+     * The kit number OCR most recently reported, and how many frames running it has said the same
+     * thing. OCR output flickers between frames, so a candidate has to hold still for
+     * [REQUIRED_STABLE_FRAMES] before it is worth interrupting the technician with — otherwise a
+     * single bad frame that happens to fit the pattern pops the confirmation dialog.
+     */
+    private var textCandidate: String? = null
+    private var textCandidateFrames = 0
+
+    /**
+     * The capture mode, mirrored out of settings so [restartCapture] can carry it into the next
+     * kit — building a fresh [CaptureUiState.Capturing] would otherwise silently drop the
+     * technician back to barcode after every save.
+     */
+    private var scanMode = ScanMode.BARCODE
+
     /** Whether app-initiated one-tap connect is available on this device (API 29+). */
     val canConnectStarlink: Boolean get() = wifiConnector.isSupported
 
@@ -82,6 +107,18 @@ class CaptureViewModel(
         // Track any WiFi the phone is already on; the detection loop reads [currentNetwork] each cycle.
         viewModelScope.launch {
             dishNetwork.dishNetworkFlow().collect { passiveNetwork = it }
+        }
+        // The capture mode is a persisted preference; the UI writes it through [onSetScanMode] and
+        // reads it back here, so state stays single-sourced.
+        viewModelScope.launch {
+            settings.scanMode.collect { mode ->
+                scanMode = mode
+                resetTextCandidate()
+                val current = _state.value
+                if (current is CaptureUiState.Capturing && current.scanMode != mode) {
+                    _state.value = current.copy(scanMode = mode)
+                }
+            }
         }
         // No auto-connect on start — the technician triggers joining the dish's "STARLINK…" AP by
         // tapping the Dish ID signalizer (see [onConnectStarlink]).
@@ -117,7 +154,35 @@ class CaptureViewModel(
     fun restartCapture() {
         pollJob?.cancel()
         lastRejected = null
-        _state.value = CaptureUiState.Capturing()
+        resetTextCandidate()
+        _state.value = CaptureUiState.Capturing(scanMode = scanMode)
+        startDetectLoop()
+    }
+
+    /**
+     * The capture screen became visible again — resume polling for the dish.
+     *
+     * Paired with [onScreenStopped] and driven from the screen's lifecycle, because
+     * [viewModelScope] is not lifecycle-aware: without this the loop keeps opening sockets every
+     * few seconds for as long as the ViewModel lives, including while the app sits in the
+     * background with the camera already unbound. Over a shift that is continuous radio and CPU
+     * work with nothing on screen to show for it.
+     *
+     * Resuming re-reads the dish rather than trusting what was on screen before, so a phone that
+     * left the dish's WiFi while backgrounded reports that on the first poll.
+     */
+    fun onScreenStarted() {
+        if (pollJob?.isActive == true) return
+        if (_state.value !is CaptureUiState.Capturing) return // Summary owns the screen; nothing to poll.
+        startDetectLoop()
+    }
+
+    /** The capture screen went away — stop polling until [onScreenStarted]. */
+    fun onScreenStopped() {
+        pollJob?.cancel()
+    }
+
+    private fun startDetectLoop() {
         pollJob = viewModelScope.launch { detectLoop() }
     }
 
@@ -207,17 +272,9 @@ class CaptureViewModel(
     /** Commit the dish ID into the signalizer and pulse capture feedback. */
     private fun setDishId(id: String) {
         val current = _state.value as? CaptureUiState.Capturing ?: return
-        _state.value = current.copy(dishId = normalizeDishId(id), phase = CaptureUiState.SearchPhase.CONNECTED)
+        _state.value = current.copy(dishId = DishInfo.normalizeId(id), phase = CaptureUiState.SearchPhase.CONNECTED)
         _scanEvents.tryEmit(Unit)
     }
-
-    /**
-     * Keep only the part after the "ut" prefix Starlink dish IDs carry, e.g.
-     * "ut01000000-00000000-00001234" → "01000000-00000000-00001234". Left unchanged if it doesn't
-     * start with "ut". This normalized value is what we display and save to the sheet.
-     */
-    private fun normalizeDishId(id: String): String =
-        if (id.length > 2 && id.startsWith("ut", ignoreCase = true)) id.substring(2) else id
 
     /**
      * Feed a raw barcode value (from the ML Kit analyzer) into the **current target** field. The kit
@@ -236,9 +293,54 @@ class CaptureViewModel(
      *  - emit a [scanEvents] feedback pulse only on a real capture.
      */
     fun onScan(raw: String, format: BarcodeFormat) {
+        if (format != BarcodeFormat.DATA_MATRIX) return
+        offer(raw)
+    }
+
+    /**
+     * Feed a frame of OCR text (from [TextAnalyzer]) into the kit field — the [ScanMode.TEXT] path,
+     * for a Data Matrix label that won't decode.
+     *
+     * Unlike a barcode scan, which yields one unambiguous value, this arrives as everything the
+     * camera could read on the box. [KitNumber.extract] picks the kit number out of it, and the
+     * result must then hold still for [REQUIRED_STABLE_FRAMES] consecutive frames: OCR flickers,
+     * and offering a one-frame misread would train the technician to dismiss the dialog.
+     *
+     * Kit only, by design — the dish serial is always scanned. Once a candidate is accepted it goes
+     * through exactly the same [offer] path as a barcode, so the confirmation dialog, the
+     * already-captured check and the rejected-value suppression all apply unchanged.
+     */
+    fun onScanText(rawText: String) {
+        val current = _state.value as? CaptureUiState.Capturing ?: return
+        if (current.scanMode != ScanMode.TEXT) return
+        if (current.target != ScanTarget.KIT) return
+
+        val candidate = KitNumber.extract(rawText)
+        if (candidate == null) {
+            // Nothing kit-shaped in this frame; the run of agreeing frames is broken.
+            resetTextCandidate()
+            return
+        }
+        if (candidate != textCandidate) {
+            textCandidate = candidate
+            textCandidateFrames = 1
+            return
+        }
+        textCandidateFrames++
+        if (textCandidateFrames < REQUIRED_STABLE_FRAMES) return
+        offer(candidate)
+    }
+
+    /**
+     * Hold [raw] for confirmation instead of committing it, so a mis-aimed read can be rejected
+     * before it fills the field. Beep so the tech knows a code was captured to review.
+     *
+     * Shared by both capture paths. The camera reports the same value many times per second and,
+     * after the target advances, the previous value lingers in frame — hence the guards.
+     */
+    private fun offer(raw: String) {
         val current = _state.value as? CaptureUiState.Capturing ?: return
         val target = current.target ?: return // everything captured — scanner is idle
-        if (format != BarcodeFormat.DATA_MATRIX) return
         if (current.pendingScan != null) return // a code is already awaiting Accept/No confirmation
 
         val value = raw.trim()
@@ -246,10 +348,20 @@ class CaptureViewModel(
         if (value in current.checklist.values) return // repeat frame or the previous field's code
         if (value == lastRejected) return // the just-rejected code still lingering in frame
 
-        // Hold the scan for confirmation instead of committing it, so a mis-aimed read can be
-        // rejected before it fills the field. Beep so the tech knows a code was captured to review.
         _state.value = current.copy(pendingScan = CaptureUiState.PendingScan(target, value))
         _scanEvents.tryEmit(Unit)
+    }
+
+    /** Switch between scanning the kit's Data Matrix label and reading its printed number. */
+    fun onSetScanMode(mode: ScanMode) {
+        if (mode == scanMode) return
+        viewModelScope.launch { settings.setScanMode(mode) }
+    }
+
+    /** Forget the in-progress OCR agreement run. */
+    private fun resetTextCandidate() {
+        textCandidate = null
+        textCandidateFrames = 0
     }
 
     /** Accept the pending scan: commit it into its field and advance to the next one. */
@@ -257,6 +369,7 @@ class CaptureViewModel(
         val current = _state.value as? CaptureUiState.Capturing ?: return
         val pending = current.pendingScan ?: return
         lastRejected = null
+        resetTextCandidate()
         val checklist = current.checklist.set(pending.target, pending.value)
         _state.value = current.copy(
             checklist = checklist,
@@ -290,6 +403,7 @@ class CaptureViewModel(
     fun onSelectTarget(target: ScanTarget) {
         val current = _state.value as? CaptureUiState.Capturing ?: return
         lastRejected = null
+        resetTextCandidate()
         _state.value = current.copy(
             checklist = current.checklist.clear(target),
             target = target,
@@ -337,7 +451,7 @@ class CaptureViewModel(
             // Claim the counter here rather than reusing the one previewed on the summary: only a
             // record that is actually stored consumes a number, and the claim is atomic.
             scanDao.insert(current.record.copy(counter = settings.takeNextCounter()))
-            ServiceLocator.enqueueUpload()
+            enqueueUpload()
             onSaved()
             restartCapture()
         }
@@ -348,6 +462,9 @@ class CaptureViewModel(
 
     companion object {
         private const val POLL_INTERVAL_MS = 2_500L
+
+        /** Frames an OCR candidate must repeat before it is offered for confirmation. */
+        private const val REQUIRED_STABLE_FRAMES = 2
 
         val Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")

@@ -33,6 +33,14 @@ enable the shared secret (step 4), a matching `SHEETS_TOKEN` baked into the buil
    to paste.
 3. Save.
 
+> **Re-pasting `Code.gs` disables the shared secret.** The committed copy ships
+> `SHARED_SECRET = ''`, so pasting it over a deployment that had a secret set silently reopens the
+> endpoint to unauthenticated posts — and nothing reports it, because uploads keep succeeding either
+> way. Any time you update the script, redo [step 4](#4-set-the-shared-secret) before deploying, and
+> confirm with **Settings ▸ Test connection** from a build carrying the *wrong* token: it must
+> answer `Unauthorized`. A build with the right token answering `ok` proves the sheet is reachable,
+> not that the secret is on.
+
 ## 3. Deploy as a Web App
 
 1. **Deploy ▸ New deployment ▸ Web app**.
@@ -57,9 +65,21 @@ can extract it. Treat it as "the URL alone is not enough".
 1. Generate a secret: `openssl rand -hex 32`.
 2. Put it in the app's git-ignored `local.properties` as `SHEETS_TOKEN=<secret>`, and **build and
    roll out that APK first**.
-3. Only then set the same value as `SHARED_SECRET` in `Code.gs` and publish a new version.
+3. Only then set the same value as `SHARED_SECRET` in `Code.gs` and publish a new version —
+   **Manage deployments ▸ Edit ▸ Version: New version**. Saving alone changes nothing: `/exec` keeps
+   serving the previously published version, so the secret appears to be set while the live endpoint
+   is still open.
 4. Confirm with **Settings ▸ Test connection** — the dry run is authenticated, so a mismatched
    token reports `Unauthorized` here rather than silently failing later.
+
+To verify the secret is actually live, post to `/exec` without one; it must be refused:
+
+```bash
+curl -sL -X POST -H 'Content-Type: application/json' \
+  -d '{"dryRun":true}' '<your /exec URL>'
+# secret on:  {"status":"error","message":"Unauthorized"}
+# secret off: {"status":"ok","count":0,"dryRun":true}   ← endpoint is open
+```
 
 Order matters. Setting `SHARED_SECRET` before the token-carrying build is installed makes the
 backend reject uploads from every phone still on the old build. Nothing is lost — those records stay

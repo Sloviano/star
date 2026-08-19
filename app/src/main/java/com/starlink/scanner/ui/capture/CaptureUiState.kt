@@ -2,6 +2,7 @@ package com.starlink.scanner.ui.capture
 
 import com.starlink.scanner.data.local.ScanRecord
 import com.starlink.scanner.domain.Checklist
+import com.starlink.scanner.domain.ScanMode
 import com.starlink.scanner.domain.ScanTarget
 
 /** The two states of the Capture screen state machine. */
@@ -45,6 +46,11 @@ sealed interface CaptureUiState {
         val target: ScanTarget? = ScanTarget.KIT,
         /** A just-scanned code awaiting the technician's Accept/No confirmation, or null. */
         val pendingScan: PendingScan? = null,
+        /**
+         * How the kit number is being captured. Applies to [ScanTarget.KIT] only — the dish serial
+         * is always read from its Data Matrix label.
+         */
+        val scanMode: ScanMode = ScanMode.BARCODE,
     ) : CaptureUiState {
         /** All three signalizers ready — kit, dish serial, and dish ID captured. */
         val canSave: Boolean get() = !dishId.isNullOrBlank() && checklist.canFinish

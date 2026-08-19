@@ -1,12 +1,58 @@
-# Add project specific R8 rules here.
-# AGP will combine all keep rule files in src/main/keepRules to pass to R8
+# R8 keep rules. AGP combines every file in src/main/keepRules and passes them to R8.
 #
-# For more details, see
-#   https://d.android.com/r/tools/r8/keep-rules
+# Most dependencies here ship their own consumer rules inside their AAR/JAR (Room, OkHttp, ML Kit,
+# gRPC's transport). What follows covers the two libraries whose Android artifacts rely on
+# reflection over names R8 would otherwise rewrite, plus the app's own reflective entry points.
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# --- protobuf-lite (Module 1: the dish gRPC stubs) ---
+# GeneratedMessageLite decodes wire data through RawMessageInfo, which names each field as a string
+# and looks it up reflectively. Renaming or removing those fields makes every dish response come
+# back empty at runtime — with no exception, which is the worst possible failure here: the app would
+# simply never read a dish ID in the field.
+-keepclassmembers class * extends com.google.protobuf.GeneratedMessageLite {
+    <fields>;
+}
+-keepclassmembers class * extends com.google.protobuf.GeneratedMessageLite {
+    ** newBuilder();
+    ** getDefaultInstance();
+}
+# The generated *OrBuilder interfaces and the dynamic-method machinery.
+-keep class com.google.protobuf.** { *; }
+-dontwarn com.google.protobuf.**
+# Our own generated stubs (device_min.proto -> spacex.api.device.*).
+-keep class spacex.api.device.** { *; }
+
+# --- gRPC ---
+# Transport and codec are picked up through ServiceLoader / reflection.
+-keep class io.grpc.** { *; }
+-dontwarn io.grpc.**
+# grpc-okhttp and grpc-stub reference optional Android/JDK classes that aren't on this classpath.
+-dontwarn javax.naming.**
+-dontwarn org.codehaus.mojo.animal_sniffer.**
+-dontwarn javax.annotation.**
+
+# --- kotlinx.serialization (Module 5: the upload DTOs) ---
+# The compiler plugin generates a Companion.serializer() per @Serializable class, reached
+# reflectively. If it is stripped, uploads fail to encode and records never leave the phone.
+-keepattributes *Annotation*, InnerClasses
+-dontnote kotlinx.serialization.**
+-keepclassmembers class kotlinx.serialization.json.** {
+    *** Companion;
+}
+-keepclasseswithmembers class kotlinx.serialization.json.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
+-keep,includedescriptorclasses class com.starlink.scanner.**$$serializer { *; }
+-keepclassmembers class com.starlink.scanner.** {
+    *** Companion;
+    *** INSTANCE;
+    kotlinx.serialization.KSerializer serializer(...);
+}
+
+# --- App entry points constructed reflectively by the platform ---
+# WorkManager instantiates workers by class name.
+-keep class com.starlink.scanner.data.upload.UploadWorker { <init>(...); }
+# Room reads the generated implementation and the entity's fields.
+-keep class com.starlink.scanner.data.local.** { *; }
+# BuildConfig holds the endpoint, token and repo the app reads at runtime.
+-keep class com.starlink.scanner.BuildConfig { *; }

@@ -9,13 +9,14 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.starlink.scanner.BuildConfig
+import com.starlink.scanner.domain.ScanMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
 /** App settings backed by DataStore (Preferences): Apps Script URL and upload diagnostics. */
-class SettingsRepository(private val context: Context) {
+class SettingsRepository(private val context: Context) : UploadSettings, CaptureSettings {
 
     private object Keys {
         val SHEETS_URL = stringPreferencesKey("sheets_url")
@@ -27,9 +28,10 @@ class SettingsRepository(private val context: Context) {
         val AUTO_JOIN_DISH_WIFI = booleanPreferencesKey("auto_join_dish_wifi")
         val DISH_SSID = stringPreferencesKey("dish_ssid")
         val NEXT_COUNTER = longPreferencesKey("next_counter")
+        val SCAN_MODE = stringPreferencesKey("scan_mode")
     }
 
-    val sheetsUrl: Flow<String> = context.dataStore.data
+    override val sheetsUrl: Flow<String> = context.dataStore.data
         .map { it[Keys.SHEETS_URL] ?: BuildConfig.DEFAULT_SHEETS_URL }
 
     /** Epoch-ms of the last successful upload, or 0 if none yet — shown in Settings diagnostics. */
@@ -44,12 +46,12 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.SHEETS_URL] = url }
     }
 
-    suspend fun setLastUploadTime(epochMs: Long) {
+    override suspend fun setLastUploadTime(epochMs: Long) {
         context.dataStore.edit { it[Keys.LAST_UPLOAD] = epochMs }
     }
 
     /** Record (or, with a blank string, clear) the last upload failure reason. */
-    suspend fun setLastUploadError(reason: String) {
+    override suspend fun setLastUploadError(reason: String) {
         context.dataStore.edit { it[Keys.LAST_UPLOAD_ERROR] = reason }
     }
 
@@ -60,7 +62,7 @@ class SettingsRepository(private val context: Context) {
      * starting value in Settings so a technician can continue a paper log or split a range across
      * two phones; from there it advances by one per saved record.
      */
-    val nextCounter: Flow<Long> = context.dataStore.data
+    override val nextCounter: Flow<Long> = context.dataStore.data
         .map { it[Keys.NEXT_COUNTER] ?: DEFAULT_COUNTER }
 
     /** Set the number the next saved record will use. */
@@ -74,13 +76,33 @@ class SettingsRepository(private val context: Context) {
      * number twice. Consumed at save time only — a record the technician discards from the summary
      * doesn't burn a number.
      */
-    suspend fun takeNextCounter(): Long {
+    override suspend fun takeNextCounter(): Long {
         var claimed = DEFAULT_COUNTER
         context.dataStore.edit { prefs ->
             claimed = prefs[Keys.NEXT_COUNTER] ?: DEFAULT_COUNTER
             prefs[Keys.NEXT_COUNTER] = claimed + 1
         }
         return claimed
+    }
+
+    // --- Kit capture mode ---
+
+    /**
+     * How the kit number is captured. Persisted rather than reset per kit: a technician working a
+     * pallet of boxes with unreadable labels shouldn't re-pick text mode on every one, and the
+     * toggle is one tap away on the capture screen when they want the barcode back.
+     *
+     * An unrecognised stored value falls back to [ScanMode.BARCODE] — the mode that always works.
+     */
+    override val scanMode: Flow<ScanMode> = context.dataStore.data
+        .map { prefs ->
+            prefs[Keys.SCAN_MODE]
+                ?.let { name -> ScanMode.entries.firstOrNull { it.name == name } }
+                ?: ScanMode.BARCODE
+        }
+
+    override suspend fun setScanMode(mode: ScanMode) {
+        context.dataStore.edit { it[Keys.SCAN_MODE] = mode.name }
     }
 
     // --- Device-wide dish WiFi (network suggestion) ---
@@ -99,14 +121,14 @@ class SettingsRepository(private val context: Context) {
      * Remembered because a suggestion must name the SSID exactly and dish APs aren't all called
      * plain "STARLINK".
      */
-    val dishSsid: Flow<String> = context.dataStore.data
+    override val dishSsid: Flow<String> = context.dataStore.data
         .map { it[Keys.DISH_SSID] ?: "" }
 
     suspend fun setAutoJoinDishWifi(enabled: Boolean) {
         context.dataStore.edit { it[Keys.AUTO_JOIN_DISH_WIFI] = enabled }
     }
 
-    suspend fun setDishSsid(ssid: String) {
+    override suspend fun setDishSsid(ssid: String) {
         context.dataStore.edit { it[Keys.DISH_SSID] = ssid }
     }
 
